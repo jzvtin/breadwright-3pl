@@ -1,0 +1,18 @@
+{
+  "name": "breadwright-3pl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Breadwright <-> Datex FootPrint WMS (Ice Cube Cold Storage) SFTP/XML integration",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dryrun:order": "node src/cli/dryrun-order.js",
+    "dryrun:inbound": "node src/cli/dryrun-inbound.js",
+    "poll": "node src/poller.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ssh2-sftp-client": "^11.0.0"
+  }
+}

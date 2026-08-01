@@ -1,0 +1,35 @@
+{
+  "id": 5551234567890,
+  "name": "#13532",
+  "order_number": 13532,
+  "email": "joe.customer@example.com",
+  "phone": "617-610-6677",
+  "billing_address": {
+    "first_name": "Joe",
+    "last_name": "Customer",
+    "phone": "617-610-6677",
+    "address1": "28 Somewhere Ave",
+    "city": "Melrose",
+    "province_code": "MA",
+    "zip": "02176",
+    "country_code": "US"
+  },
+  "shipping_address": {
+    "first_name": "Joe",
+    "last_name": "Customer",
+    "phone": "617-610-6677",
+    "address1": "28 Somewhere Ave",
+    "city": "Melrose",
+    "province_code": "MA",
+    "zip": "02176",
+    "country_code": "US"
+  },
+  "line_items": [
+    { "handle": "country-sourdough", "sku": "BW_CSD", "title": "Country Sourdough", "quantity": 1 },
+    { "handle": "seeded-sourdough", "sku": "BW_SeedSD", "title": "Seeded Sourdough", "quantity": 1 },
+    { "handle": "cranberry-pecan", "sku": "BW_CranPec", "title": "Cranberry Pecan", "quantity": 1 },
+    { "handle": "multigrain-pullman", "sku": "BW_MGP", "title": "Multigrain Pullman", "quantity": 1 },
+    { "handle": "french-baguette", "sku": "BW_DB2PK", "title": "Demi Baguette 2-Pack", "quantity": 1 },
+    { "handle": "pane-francese", "sku": "BW_PFran", "title": "Pane Francese", "quantity": 1 }
+  ]
+}
