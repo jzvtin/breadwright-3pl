@@ -1,5 +1,8 @@
 # Breadwright ⇄ Datex FootPrint WMS integration
 
+> 👋 **New here / non-technical? Start with [`FOR-MUHAMMAD.md`](FOR-MUHAMMAD.md)** — plain-English overview of what this is and where we are.
+
+
 Moves order/inventory data between Breadwright's Shopify store and the 3PL's
 **Datex FootPrint WMS** (warehouse: *Ice Cube Cold Storage*) as **XML over SFTP**.
 
