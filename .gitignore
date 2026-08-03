@@ -3,3 +3,5 @@ node_modules/
 out/*.xml
 out/.sent/
 *.log
+# Contains PEEK_KEY + dashboard password — deployed to dynaradigital, never commit (repo is public)
+deploy/breadwright-status.php
