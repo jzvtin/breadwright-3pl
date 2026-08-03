@@ -27,7 +27,7 @@ function orderLine(lineNumber, shipmentCode, materialCode, amount) {
  * @returns {{ xml: string, warnings: string[] }}
  */
 function buildCustomerOrder(order) {
-  const { CONSTANTS: C, resolveMaterial, PACKAGING, ORDER_UDFS } = cfg;
+  const { CONSTANTS: C, resolveMaterial, PACKAGING, FIRST_ORDER_INSERTS, ORDER_UDFS } = cfg;
   const warnings = [];
   const shipCode = String(order.number);
 
@@ -39,20 +39,40 @@ function buildCustomerOrder(order) {
     if (r.code) {
       lines.push(orderLine(n++, shipCode, r.code, li.quantity));
     } else if (r.kit) {
-      // Kit handling is unresolved until Bill confirms — surface loudly.
-      warnings.push(
-        `Kit product "${r.handle}" has no resolution rule yet (kit vs explode) — see config/materials.js KITS.`
-      );
+      if (r.kit.kit) {
+        // Ship as a single kit code; assumes Datex has a matching kit/BOM that
+        // explodes it warehouse-side. Surface the assumption loudly.
+        lines.push(orderLine(n++, shipCode, r.kit.kit, li.quantity));
+        warnings.push(
+          `Kit "${r.handle}" sent as single code "${r.kit.kit}" (qty ${li.quantity}) — assumes Datex has a matching kit/BOM. CONFIRM code + that it explodes warehouse-side (else switch KITS to explode).`
+        );
+      } else if (r.kit.explode) {
+        for (const [code, qty] of r.kit.explode) {
+          lines.push(orderLine(n++, shipCode, code, qty * li.quantity));
+        }
+      } else {
+        warnings.push(
+          `Kit product "${r.handle}" has no resolution rule yet (kit vs explode) — see config/materials.js KITS.`
+        );
+      }
     } else {
       warnings.push(
-        `No WMS material code for Shopify item "${r.unknown}" — add it to config/materials.js LOAVES.`
+        `No WMS material code for Shopify item "${r.unknown}" — add it to config/materials.js LOAVES/KITS.`
       );
     }
   }
 
-  // 2) Auto-injected packaging (ice / box / inserts) — not Shopify line items.
+  // 2) Auto-injected packaging (box / insulation / ice / inserts) — not Shopify line items.
   for (const p of PACKAGING) {
     lines.push(orderLine(n++, shipCode, p.code, p.qty));
+  }
+
+  // 2b) First-order-only inserts (e.g. Welcome Booklet) when the customer's
+  //     first order is flagged upstream.
+  if (order.isFirstOrder && Array.isArray(FIRST_ORDER_INSERTS)) {
+    for (const p of FIRST_ORDER_INSERTS) {
+      lines.push(orderLine(n++, shipCode, p.code, p.qty));
+    }
   }
 
   // 3) Header. VendorReference held a tracking number in the sample, but we

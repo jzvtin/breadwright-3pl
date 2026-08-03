@@ -8,7 +8,9 @@
     "start": "node src/server.js",
     "dryrun:order": "node src/cli/dryrun-order.js",
     "dryrun:inbound": "node src/cli/dryrun-inbound.js",
-    "poll": "node src/poller.js"
+    "poll": "node src/poller.js",
+    "check": "node sftp-check.js",
+    "send:test": "node send-test-order.js"
   },
   "engines": { "node": ">=18" },
   "dependencies": {

@@ -48,6 +48,8 @@ function normalizeOrder(o, now = new Date()) {
     orderId: o.id,
     // Default: request delivery ~2 days out. Adjust to your SLA / cutoff logic.
     requestedDelivery: isoDate(now, 2),
+    // First order for this customer -> triggers first-order inserts (welcome booklet).
+    isFirstOrder: !!(o.customer && Number(o.customer.orders_count) === 1),
     billing: mapAddr(bill, 'Customer'),
     shipping: mapAddr(ship, 'Customer'),
     lineItems: (o.line_items || []).map((li) => ({
