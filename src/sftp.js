@@ -84,4 +84,41 @@ async function archiveReturnFile(name) {
   }
 }
 
-module.exports = { putXml, fetchReturnFiles, archiveReturnFile, DRY_RUN };
+/**
+ * READ-ONLY peek helpers for the status dashboard. These ALWAYS connect to the
+ * real SFTP (independent of DRY_RUN) since they only list/read — never write.
+ */
+async function peekList(dirs) {
+  const c = cfg();
+  const Client = require('ssh2-sftp-client');
+  const sftp = new Client();
+  await sftp.connect({ host: c.host, port: c.port, username: c.username, password: c.password });
+  try {
+    const out = {};
+    for (const d of dirs) {
+      try {
+        const r = await sftp.list(d);
+        out[d] = r.map((f) => ({ name: f.name, type: f.type, size: f.size, mtime: f.modifyTime }));
+      } catch (e) {
+        out[d] = { error: e.message.split(' - ')[0] };
+      }
+    }
+    return out;
+  } finally {
+    await sftp.end();
+  }
+}
+
+async function peekFile(remotePath) {
+  const c = cfg();
+  const Client = require('ssh2-sftp-client');
+  const sftp = new Client();
+  await sftp.connect({ host: c.host, port: c.port, username: c.username, password: c.password });
+  try {
+    return (await sftp.get(remotePath)).toString('utf8');
+  } finally {
+    await sftp.end();
+  }
+}
+
+module.exports = { putXml, fetchReturnFiles, archiveReturnFile, peekList, peekFile, DRY_RUN };
