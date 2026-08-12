@@ -28,7 +28,9 @@ Three flows:
 ## Key facts / where things live
 - **GitHub:** https://github.com/jzvtin/breadwright-3pl (public)
 - **Railway:** project `breadwright-3pl` (Justin K's workspace).
-  Service URL: **https://breadwright-3pl-production.up.railway.app**
+  - **Public API domain: https://api.breadwright.com** (canonical — use this
+    everywhere: Shopify webhook target, health checks, `POST /batch/run`).
+  - Underlying Railway URL: https://breadwright-3pl-production.up.railway.app
   - `GET /health` → `{ok, dryRun}`
   - `POST /webhooks/shopify/orders` → the Shopify webhook target
 - **Contacts:** Bill Turgeon (RSI/Datex, warehouse side) · Muhammad
@@ -46,18 +48,35 @@ Set: `DRY_RUN=1`, `DATEX_SFTP_HOST/PORT/USER`, `SHOPIFY_STORE`, SFTP dir guesses
 
 ## Commands
 ```bash
-npm run dryrun:order      # Shopify order -> out/*.xml (no network)
+npm run dryrun:order      # single Shopify order -> out/*.xml (no network)
+npm run dryrun:batch      # END-OF-DAY BATCH of orders -> out/BW_BATCH_*.xml (no network)
+npm run batch             # LIVE nightly batch: pull today's paid orders -> SFTP + tag sent
 npm run dryrun:inbound    # bake batch    -> out/*.xml
-npm start                 # webhook server
+npm start                 # webhook server (also exposes POST /batch/run?key=PEEK_KEY)
 npm run poll              # return-feed poller (skeleton)
 railway up --detach       # redeploy (also auto-deploys on git push if GitHub-linked)
 ```
 
+## End-of-day batch (the "batch orders at midnight to Ice Cube" flow)
+- `src/batch.js` pulls PAID + unshipped + not-yet-`3pl-sent` orders (Shopify Admin
+  REST, `src/shopify.js fetchOrdersForBatch`), builds ONE Datex file whose `<Orders>`
+  root wraps every day's `<Order>` (`buildBatch` in `src/xml/buildOrder.js`), SFTP-drops
+  it (or out/ in dry-run), then tags each order `3pl-sent` (persistent idempotency —
+  survives Railway restarts, unlike the on-disk `.sent` markers).
+- **Scheduling (Justin, in Railway):** add a 2nd service from this repo with
+  startCommand `npm run batch` and Cron Schedule `0 4 * * *` (= 00:00 EDT; use `0 5 * * *`
+  in winter/EST). Or point any external cron at `POST /batch/run?key=<PEEK_KEY>`.
+- **CONFIRM w/ Bill:** does the import accept many `<Order>` in one file? If they want
+  one file per order, set env `BATCH_MODE=per-order` (drops individually, same run).
+- **Scopes needed on the custom app:** `read_orders` (pull) + `write_orders` (tag sent).
+
 ## Go-live checklist (when the 3PL replies)
 1. Update `config/materials.js` from Bill's answers (codes, packaging, UserCode,
    ShipTo, lots), push → Railway redeploys.
-2. Create Shopify webhook (`orders/create`, JSON) → the `/webhooks/shopify/orders`
-   URL above → paste its signing secret into `SHOPIFY_WEBHOOK_SECRET`.
+2. For the NIGHTLY BATCH (preferred over per-order webhook): create a Shopify custom
+   app with `read_orders`+`write_orders`, set `SHOPIFY_STORE` + `SHOPIFY_ADMIN_TOKEN`,
+   add a Railway cron service running `npm run batch` at `0 4 * * *`. (Per-order webhook
+   is still available — create an `orders/create` webhook → `SHOPIFY_WEBHOOK_SECRET`.)
 3. Add `SHOPIFY_ADMIN_TOKEN` + finish `src/poller.js` once the return-file schema
    is confirmed.
 4. Set `DATEX_SFTP_PASSWORD` (rotated), confirm SFTP folders.
