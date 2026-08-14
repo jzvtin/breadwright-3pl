@@ -100,6 +100,14 @@ function buildOrderNode(order, opts = {}) {
         `Dry ice: destination ZIP ${zip || '(none)'} not in the zone table — assumed Zone ${dryIce.zone} (${dryIce.blocks} block${dryIce.blocks > 1 ? 's' : ''}). CONFIRM.`
       );
     }
+    // Air shipments (Priority Shippers) must declare dry ice + are capped at 1
+    // slab (5 lb). Surface this to the packer so the platform's dry-ice button
+    // gets checked.
+    if (dryIce.declareDryIce) {
+      warnings.push(
+        `AIR shipment via ${dryIce.carrier} — DECLARE dry ice on Priority Shippers (check the dry-ice button); max 1 slab (5 lb).`
+      );
+    }
 
     // 2b) First-order welcome note (BW_WB) is NOT emitted here — it is a
     //     ShipStation-only ride-along (Justin 2026-08-13), never a Datex pick.
@@ -127,7 +135,10 @@ function buildOrderNode(order, opts = {}) {
   const shipmentChildren = [
     el('WarehouseLookupCode', C.warehouseLookupCode),
     el('LookupCode', shipCode),
-    el('CarrierLookupCode', order.carrier || C.defaultCarrier),
+    // Carrier by destination: UPS Ground when reachable ≤2 ground days, else the
+    // cheapest air via Priority Shippers (from the dry-ice mode resolution).
+    // An explicit order.carrier still wins if the caller pinned one.
+    el('CarrierLookupCode', order.carrier || (dryIce && dryIce.carrier) || C.defaultCarrier),
     el('Notes', null),
     el('Dates', [el('Date', [el('Type', 'Expected'), el('Value', order.requestedDelivery)])]),
     el('Addresses', [addressBlock(order.shipping, { role: 'shipping', placeIn: 'ShipTo' })]),
@@ -160,6 +171,9 @@ function buildOrderNode(order, opts = {}) {
     gelPacks,
     kraftPaper: 0, // freezer paper removed from XML (Bill 2026-08-13) — pack list only
     dryIce,
+    carrier: (dryIce && dryIce.carrier) || order.carrier || null,
+    shipMode: (dryIce && dryIce.mode) || null, //          'ground' | 'air'
+    declareDryIce: !!(dryIce && dryIce.declareDryIce), //  air => packer checks the dry-ice button
     welcomeBooklet: !materialsOnly && !!order.isFirstOrder,
     insert: !materialsOnly && !!PACKAGING.find((p) => p.code === 'BW_Infosheet'),
   };

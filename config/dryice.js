@@ -99,6 +99,31 @@ const SERVICE_LEVELS = {
 };
 const DEFAULT_SERVICE = 'overnight';
 
+// --- Carrier + shipping MODE by destination (Justin 2026-08-14) --------------
+// 1- and 2-day GROUND shipments go UPS. Any destination we CANNOT reach within
+// two ground-transit days ships the cheapest AIR option via Yahuda's platform
+// "Priority Shippers". AIR is hard-capped at 1 slab (5 lb) of dry ice and MUST
+// be declared (check the dry-ice button on Priority Shippers); GROUND needs no
+// declaration and carries no regulatory dry-ice cap.
+const AIR_MAX_BLOCKS = 1; //            5 lb / 1 slab — hard cap on ALL air shipments
+const GROUND_MAX_TRANSIT_DAYS = 2; //   reachable within 2 ground days => UPS Ground
+// zone -> UPS Ground transit days, incl. zone 1 (very local, same/next day).
+function groundTransitDays(zone) {
+  if (zone == null) return null;
+  if (zone <= 1) return 1;
+  return ZONE_TRANSIT_DAYS[zone] != null ? ZONE_TRANSIT_DAYS[zone] : null;
+}
+// Decide carrier + mode for a destination. Unknown zone => AIR (conservative:
+// we can't confirm 2-day ground, so declare dry ice and keep it cold).
+function resolveShipMode(zip, zoneArg) {
+  const zone = zoneArg != null ? zoneArg : zoneForZip(zip);
+  const gd = groundTransitDays(zone);
+  const ground = gd != null && gd <= GROUND_MAX_TRANSIT_DAYS;
+  return ground
+    ? { mode: 'ground', carrier: 'UPS Ground', declareDryIce: false, groundTransitDays: gd, zone, maxBlocks: null }
+    : { mode: 'air', carrier: 'Priority Shippers', declareDryIce: true, groundTransitDays: gd, zone, maxBlocks: AIR_MAX_BLOCKS };
+}
+
 // UPS days with NO pickup/delivery (2026). Add/trim as needed — one-line edits.
 const UPS_HOLIDAYS_2026 = new Set([
   '2026-01-01', // New Year's Day
@@ -302,22 +327,38 @@ function computeDryIce(opts = {}) {
   const totalLbs = consumed + reserve;
   const wantBlocks = Math.max(1, Math.ceil(totalLbs / BLOCK_LB));
 
+  // Carrier + mode by destination (UPS Ground when reachable ≤2 ground days,
+  // else Priority Shippers air). Caller may pin it via opts.mode/opts.carrier.
+  const shipMode = opts.mode
+    ? { mode: opts.mode, carrier: opts.carrier || (opts.mode === 'air' ? 'Priority Shippers' : 'UPS Ground'), declareDryIce: opts.mode === 'air', maxBlocks: opts.mode === 'air' ? AIR_MAX_BLOCKS : null }
+    : resolveShipMode(opts.zip, zone);
+
   // Two ceilings, take the tighter. PHYSICAL: box can't hold more than
-  // MAX_BLOCKS_PER_BOX alongside the bread. REGULATORY: air services have a hard
-  // UN1845 dry-ice limit per package (1 block on Air, 2 on 2-Day). Ground = no reg cap.
+  // MAX_BLOCKS_PER_BOX alongside the bread. REGULATORY: AIR shipments (Priority
+  // Shippers) are hard-capped at 1 slab / 5 lb by dry-ice air regs (UN1845);
+  // GROUND (UPS) carries no regulatory cap. A per-service SERVICE_LEVELS cap, if
+  // supplied, still applies and the tighter of the two wins.
   const svc = SERVICE_LEVELS[opts.service] || null;
-  const regCap = svc && svc.maxBlocks != null ? svc.maxBlocks : Infinity;
+  const svcCap = svc && svc.maxBlocks != null ? svc.maxBlocks : Infinity;
+  const modeCap = shipMode.maxBlocks != null ? shipMode.maxBlocks : Infinity;
+  const regCap = Math.min(svcCap, modeCap);
   const effectiveCap = Math.min(MAX_BLOCKS_PER_BOX, regCap);
   const blocks = Math.min(wantBlocks, effectiveCap);
   const physicalCapped = wantBlocks > MAX_BLOCKS_PER_BOX;
   const regCapped = wantBlocks > regCap; // math wanted more than regs allow for this Air service
   const capped = wantBlocks > effectiveCap;
   const zoneKnown = !!(opts.zone || zoneForZip(opts.zip));
+  // Label for the cap that bit (air mode, or a specific UPS air service level).
+  const capLabel = svc ? svc.label : (shipMode.mode === 'air' ? 'air (Priority Shippers)' : 'this lane');
 
   return {
     zip: opts.zip,
     zone,
     zoneKnown,
+    mode: shipMode.mode, //          'ground' | 'air'
+    carrier: shipMode.carrier, //    'UPS Ground' | 'Priority Shippers'
+    declareDryIce: shipMode.declareDryIce, // AIR must declare dry ice; ground must not
+    groundTransitDays: shipMode.groundTransitDays != null ? shipMode.groundTransitDays : null,
     transitDays: round1(days),
     ambientF,
     ambientSource: opts.ambientSource || null,
@@ -336,7 +377,7 @@ function computeDryIce(opts = {}) {
     regCap: regCap === Infinity ? null : regCap,
     wantBlocks, //              what the math asked for before the cap
     warning: regCapped
-      ? `Route wants ${wantBlocks} blocks (${wantBlocks * BLOCK_LB} lb) but ${svc.label} is capped at ${regCap} block${regCap > 1 ? 's' : ''} (${regCap * BLOCK_LB} lb) by dry-ice air regulations (UN1845). Shipping ${blocks} block${blocks > 1 ? 's' : ''} — if that won't hold temp, upgrade insulation or use a faster lane.`
+      ? `Route wants ${wantBlocks} blocks (${wantBlocks * BLOCK_LB} lb) but ${capLabel} is capped at ${regCap} block${regCap > 1 ? 's' : ''} (${regCap * BLOCK_LB} lb) by dry-ice air regulations (UN1845). Shipping ${blocks} block${blocks > 1 ? 's' : ''} — if that won't hold temp, upgrade insulation or use a faster lane.`
       : physicalCapped
         ? `Route needs ${wantBlocks} blocks (${wantBlocks * BLOCK_LB} lb) — exceeds the ${MAX_BLOCKS_PER_BOX}-block box limit. Expedite, upgrade insulation, or split.`
         : null,
@@ -394,8 +435,10 @@ function explainDryIce(r) {
   const parts = [];
   const dest = r.address || (r.zip ? 'ZIP ' + r.zip : 'this address');
   parts.push(
-    `Shipping from ${ORIGIN_LABEL} to ${dest} — Zone ${r.zone}${r.zoneKnown ? '' : ' (assumed)'}, via ${r.serviceLabel || 'UPS'}.`
+    `Shipping from ${ORIGIN_LABEL} to ${dest} — Zone ${r.zone}${r.zoneKnown ? '' : ' (assumed)'}, via ${r.carrier || r.serviceLabel || 'UPS'}${r.mode === 'air' ? ' (air)' : r.mode === 'ground' ? ' (ground)' : ''}.`
   );
+  if (r.declareDryIce) parts.push(`AIR shipment — DECLARE dry ice (check the dry-ice button on Priority Shippers); max 1 slab (5 lb).`);
+  else if (r.mode === 'ground') parts.push(`Ground shipment — no dry-ice declaration required.`);
   if (r.transitNote) {
     parts.push(
       `${r.transitNote.charAt(0).toUpperCase() + r.transitNote.slice(1)} — dry ice sublimates every calendar day, even over a weekend when UPS isn't moving the box.`
@@ -444,6 +487,8 @@ module.exports = {
   UPS_HOLIDAYS_2026,
   FREEZER_PAPER_PER_LOAF,
   zoneForZip,
+  resolveShipMode,
+  AIR_MAX_BLOCKS,
   businessTransit,
   geocodeZip,
   fetchAmbientHigh,
