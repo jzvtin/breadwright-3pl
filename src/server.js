@@ -18,6 +18,7 @@ const { buildCustomerOrder } = require('./xml/buildOrder');
 const { packSlipHtml } = require('./packslip');
 const { resolveDryIceConditions } = require('../config/dryice');
 const { putXml, peekList, peekFile, sendToTest, DRY_RUN } = require('./sftp');
+const { registerDashboard } = require('./dashboard');
 const { runBatch } = require('./batch');
 
 // Named Breadwright example orders the dashboard can fire as a live test.
@@ -331,6 +332,10 @@ app.post('/webhooks/shopify/orders', async (req, res) => {
     console.error(`[webhook] FAILED order ${o.id}:`, err);
   }
 });
+
+// Operator console at / (api.breadwright.com) — registered last so it only
+// claims the root path, never shadowing /health, /peek/*, /packslip/*, etc.
+registerDashboard(app);
 
 app.listen(PORT, () => {
   console.log(`Breadwright 3PL service on :${PORT} (DRY_RUN=${DRY_RUN ? 'on' : 'off'})`);

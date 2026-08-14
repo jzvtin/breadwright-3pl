@@ -4,6 +4,12 @@ Auto-loaded by Claude Code when working in this repo. If you're a fresh Claude
 session picking this up: read this file first, then `FOR-MUHAMMAD.md` (overview),
 `NEEDS-FROM-BILL.md` (open questions), and `README.md` (how to run).
 
+## ⚠️ Canonical surface (2026-08-14)
+The old PHP console at **dynaradigital.com/breadwright is RETIRED — do not use or
+update it.** Everything now lives at **https://api.breadwright.com** (the Railway
+node app): status peek, test-order drops, pack lists, batch trigger, and the
+operator dashboard. `deploy/breadwright-status.php` is legacy/dead; ignore it.
+
 ## What this is
 A bridge between **Breadwright's Shopify** (`breadwright-3.myshopify.com` /
 breadwrightbox.com — artisan bread) and their **3PL's Datex FootPrint WMS** at the

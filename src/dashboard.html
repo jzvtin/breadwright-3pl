@@ -1,0 +1,446 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Breadwright 3PL — Live Console</title>
+<style>
+ *{box-sizing:border-box}
+ body{font:14px/1.5 system-ui,-apple-system,sans-serif;margin:0;background:#f5f1e8;color:#2c2418}
+ header{background:#3a2a1a;color:#f3e9d8;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;position:sticky;top:0;z-index:5}
+ header b{font-size:16px}
+ header a{color:#e9c98a;font-size:12px;text-decoration:none}
+ .wrap{max-width:1060px;margin:22px auto;padding:0 16px}
+ h2.sec{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#a08a63;margin:26px 0 10px;font-weight:700}
+ .status{background:#fff;border:1px solid #e6dcc7;border-radius:10px;padding:12px 16px;margin-bottom:8px;font-size:13px;display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+ .pill{display:inline-block;padding:2px 10px;border-radius:20px;font-weight:600;font-size:12px}
+ .green{background:#d8ecd8;color:#1f6b28}.amber{background:#f5ecc8;color:#8a6d12}.red{background:#f3d6d6;color:#a12b2b}
+
+ /* ---- Flow diagram ---- */
+ .diagram{background:#fff;border:1px solid #e6dcc7;border-radius:12px;padding:20px 18px;overflow-x:auto}
+ .pipe{display:flex;align-items:stretch;gap:0;min-width:900px}
+ .node{flex:0 0 auto;border-radius:10px;padding:12px 14px;font-size:12.5px;line-height:1.35;position:relative;display:flex;flex-direction:column;justify-content:center}
+ .node .t{font-weight:700;font-size:12.5px;margin-bottom:4px;display:flex;align-items:center;gap:6px}
+ .node .d{color:#6b5f47;font-size:11.5px}
+ .node code{background:rgba(0,0,0,.06);padding:0 4px;border-radius:3px;font-size:11px}
+ .n-shopify{background:#eaf4ec;border:1px solid #bfe0c4;width:150px}
+ .n-bridge{background:#fbf5e9;border:2px solid #c79b57;flex:1;min-width:330px}
+ .n-sftp{background:#eef0f6;border:1px solid #c3c9e0;width:150px}
+ .n-wms{background:#f3ece3;border:1px solid #d8c3a4;width:170px}
+ .arrow{flex:0 0 34px;display:flex;align-items:center;justify-content:center;color:#b79a63;font-size:22px;font-weight:700}
+ .steps{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+ .step{background:#fff;border:1px solid #e2d5ba;border-radius:7px;padding:6px 8px;font-size:11px;flex:1;min-width:88px;text-align:center;color:#5a4a2c}
+ .step b{display:block;color:#7a5c34;font-size:11px}
+ .split{display:flex;flex-direction:column;gap:6px}
+ .ok{background:#e6f2e6;border:1px solid #bfe0c4;border-radius:6px;padding:4px 8px;font-size:11px;color:#1f6b28}
+ .rej{background:#f6e3e3;border:1px solid #e2b8b8;border-radius:6px;padding:4px 8px;font-size:11px;color:#a12b2b}
+ .legend{font-size:11.5px;color:#8a7c5e;margin-top:12px}
+
+ .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+ @media(max-width:760px){.grid2{grid-template-columns:1fr}.pill{font-size:11px}}
+ .card{background:#fff;border:1px solid #e6dcc7;border-radius:12px;overflow:hidden}
+ .card h3{margin:0;padding:10px 14px;font-size:12px;background:#f2ead9;border-bottom:1px solid #e6dcc7;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a5c34}
+ .card .body{padding:12px 14px}
+ table{width:100%;border-collapse:collapse}
+ td,th{text-align:left;padding:6px 12px;border-bottom:1px solid #f0ebdf;font-size:12.5px}
+ th{color:#9a8a6a;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em}
+ .mono{font-family:ui-monospace,Menlo,monospace}
+ .tag{display:inline-block;background:#f2ead9;color:#7a5c34;border-radius:5px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace}
+
+ /* ---- Send panel ---- */
+ .send{background:#fff;border:2px solid #c79b57;border-radius:12px;padding:16px 18px}
+ .send h3{margin:0 0 4px;font-size:15px;color:#5a3f1c}
+ .send p{margin:0 0 14px;color:#6b5f47;font-size:12.5px}
+ .fixbtns{display:flex;gap:10px;flex-wrap:wrap}
+ .fixbtn{flex:1;min-width:220px;text-align:left;background:#faf4e8;border:1px solid #d8c3a4;border-radius:10px;padding:12px 14px;cursor:pointer;transition:.12s}
+ .fixbtn:hover{border-color:#c79b57;background:#f6ecd6}
+ .fixbtn b{display:block;color:#5a3f1c;font-size:13.5px;margin-bottom:2px}
+ .fixbtn span{color:#8a7c5e;font-size:11.5px}
+ .fixbtn .go{display:inline-block;margin-top:8px;background:#7a5c34;color:#fff;padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600}
+ #sendresult{margin-top:14px;display:none;border-radius:10px;padding:12px 14px;font-size:13px}
+ #sendresult.good{background:#eaf6ea;border:1px solid #bfe0c4}
+ #sendresult.bad{background:#f6e3e3;border:1px solid #e2b8b8;color:#a12b2b}
+ #sendresult .fn{font-family:ui-monospace,monospace;font-weight:700;color:#1f6b28}
+ #sendresult pre{margin:10px 0 0;max-height:280px;overflow:auto;background:#fbfaf5;border:1px solid #e6dcc7;border-radius:8px;padding:12px;font:11.5px/1.5 ui-monospace,monospace;white-space:pre}
+ .genwrap{margin-top:18px;border-top:1px dashed #d8c3a4;padding-top:16px}
+ .frow{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+ .frow label{flex:1;min-width:110px;display:flex;flex-direction:column;font-size:12px;font-weight:600;color:#7a5c34;gap:4px}
+ .frow label.chk{flex-direction:row;align-items:center;font-weight:400;color:#5a4a2c;gap:6px;min-width:auto;flex:1}
+ .genwrap input,.genwrap select{padding:8px 10px;border:1px solid #d8d0c0;border-radius:7px;font:inherit;background:#fff}
+ .glabel{font-size:12px;font-weight:600;color:#7a5c34;margin:4px 0 6px}
+ .girow{display:flex;gap:8px;margin-bottom:7px;align-items:center}
+ .girow .g-prod{flex:1}.girow .g-qty{width:72px}
+ .genwrap>div>button,.genwrap button{cursor:pointer}
+ .pickpreview{background:#fff;border:1px solid #e6dcc7;border-radius:8px;margin-top:10px;box-shadow:0 4px 18px rgba(0,0,0,.08);overflow:auto;max-height:660px}
+ .pickpreview>div{margin:0 auto}
+ @media print{body *{visibility:hidden}.pickpreview,.pickpreview *{visibility:visible}.pickpreview{position:absolute;left:0;top:0;box-shadow:none;border:0;max-height:none}}
+ .packcard{margin:12px 0 0;background:#fff;border:1px solid #d8c3a4;border-radius:10px;overflow:hidden}
+ .pc-h{background:#3a2a1a;color:#f3e9d8;padding:8px 14px;font-weight:700;font-size:13px}
+ .pc-b{display:grid;grid-template-columns:1fr 1fr;gap:0 18px;padding:12px 16px}
+ @media(max-width:640px){.pc-b{grid-template-columns:1fr}}
+ .pc-b b{display:block;color:#7a5c34;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin:4px 0 4px}
+ .pc-b ul{margin:0 0 10px;padding-left:18px}
+ .pc-b li{font-size:13px;margin:2px 0}
+ .pc-b .ice{background:#eef4fb;border:1px solid #cfe0f2;border-radius:5px;padding:1px 6px;font-weight:700;color:#20558a}
+ .pc-label{grid-column:1/-1;border-top:1px solid #f0ebdf;padding:10px 0 2px;font-size:13px;color:#5a4a2c}
+
+ button{background:#7a5c34;color:#fff;border:0;padding:7px 14px;border-radius:7px;cursor:pointer;font:inherit}
+ button.ghost{background:#f2ead9;color:#3a2a1a}
+ .muted{color:#9a8a6a}
+ .file a{font-family:ui-monospace,monospace;color:#6b4a1f;cursor:pointer;text-decoration:none}
+ .file a:hover{text-decoration:underline}
+ .badge{display:inline-block;padding:1px 7px;border-radius:20px;font-size:11px;font-weight:600;margin-left:6px;background:#f5ecc8;color:#8a6d12}
+ .empty{padding:12px 14px;color:#9a9a9a;font-style:italic}.errbox{padding:12px 14px;color:#b23b3b}
+ #overlay{position:fixed;inset:0;background:rgba(30,22,12,.55);display:none;align-items:center;justify-content:center;padding:24px;z-index:20}
+ #viewer{background:#fff;border-radius:12px;max-width:900px;width:100%;max-height:88vh;display:flex;flex-direction:column;overflow:hidden}
+ #viewer .vh{padding:12px 16px;background:#f2ead9;border-bottom:1px solid #e6dcc7;display:flex;justify-content:space-between;gap:12px;align-items:center}
+ #viewer .fn{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
+ #viewer pre{margin:0;padding:16px;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre;background:#fbfaf6;flex:1}
+</style></head><body>
+<header>
+ <b>🍞 Breadwright 3PL — Live Console</b>
+ <span><span id="status" class="muted">loading…</span> &nbsp; <a href="?logout=1">log out</a></span>
+</header>
+<div class="wrap">
+
+ <div class="status" id="statusbar"></div>
+
+ <!-- ============ HOW IT WORKS ============ -->
+ <h2 class="sec">How the integration works</h2>
+ <div class="diagram">
+  <div class="pipe">
+   <div class="node n-shopify">
+    <div class="t">🛒 Shopify</div>
+    <div class="d">A customer order on breadwrightbox.com fires a <code>orders/create</code> webhook.</div>
+   </div>
+   <div class="arrow">&rarr;</div>
+   <div class="node n-bridge">
+    <div class="t">⚙️ Breadwright Bridge <span class="muted" style="font-weight:400">(our service · Railway)</span></div>
+    <div class="d">The 3PL has no API until 2027 — this service <b>is</b> the interim API. It turns a Shopify order into a Datex-shaped XML file.</div>
+    <div class="steps">
+     <div class="step"><b>1 · Verify</b>HMAC-signed webhook</div>
+     <div class="step"><b>2 · Normalize</b>addresses, qty, first-order flag</div>
+     <div class="step"><b>3 · Map SKUs</b>Shopify → <code>BW_*</code> codes</div>
+     <div class="step"><b>4 · Inject packaging</b>box · insulation · dry ice · inserts</div>
+     <div class="step"><b>5 · Build XML</b><code>Customer Order Shipment</code></div>
+    </div>
+   </div>
+   <div class="arrow">&rarr;</div>
+   <div class="node n-sftp">
+    <div class="t">🔒 SFTP</div>
+    <div class="d">File dropped to the Ice Cube warehouse SFTP <code>/Test</code> folder.</div>
+   </div>
+   <div class="arrow">&rarr;</div>
+   <div class="node n-wms">
+    <div class="t">🏭 Datex WMS</div>
+    <div class="d">Warehouse imports the file:</div>
+    <div class="split" style="margin-top:6px">
+     <div class="ok">✓ <b>Archive</b> — imported OK</div>
+     <div class="rej">✕ <b>Error</b> — rejected / malformed</div>
+    </div>
+   </div>
+  </div>
+  <div class="legend">
+   ↩︎ <b>Return feed (next phase):</b> the WMS drops a ship-confirmation file with the UPS tracking number →
+   our poller writes it back to Shopify and emails the customer. Three flows total: <b>outbound orders</b>,
+   <b>inbound stock (ASN)</b>, and <b>return/tracking</b>.
+  </div>
+ </div>
+
+ <!-- ============ SEND A TEST ORDER ============ -->
+ <h2 class="sec">Send a live test order to the warehouse</h2>
+ <div class="send">
+  <h3>▶ Fire a real Breadwright order</h3>
+  <p>Builds a real Datex XML from a Breadwright example order and drops it live into the warehouse
+     <b>/Test</b> folder — exactly what a real Shopify order produces. It appears in the folder list below;
+     Datex import moves it to <b>Archive</b> (accepted) or <b>Error</b> (rejected).</p>
+  <div class="fixbtns" id="fixbtns"><span class="muted">loading examples…</span></div>
+
+  <div class="genwrap">
+   <h3 style="margin:0 0 4px">✎ Or build a custom order</h3>
+   <p class="muted" style="margin:0 0 12px">Edit the customer and items, then generate — you get the exact Datex XML + warehouse pick list a real Shopify order would produce, dropped into <b>/Test</b>.</p>
+   <div class="frow"><label>Customer name<input id="g-name" value="Jane Demo"></label><label>Email<input id="g-email" value="jane@breadwrightbox.com"></label></div>
+   <div class="frow"><label style="flex:2">Street address<input id="g-addr" value="12 Baker St"></label><label>City<input id="g-city" value="Boston"></label></div>
+   <div class="frow"><label style="max-width:90px">State<input id="g-state" value="MA" maxlength="2"></label><label style="max-width:120px">ZIP<input id="g-zip" value="02108"></label><label class="chk"><input type="checkbox" id="g-first" checked> First order <span class="muted">(welcome booklet)</span></label></div>
+   <div class="glabel">Items</div>
+   <div id="g-items"></div>
+   <button type="button" class="ghost" onclick="addItem()" style="margin-top:8px">+ add item</button>
+   <div style="margin-top:14px"><button onclick="generateOrder(this)">▶ Generate &amp; send to /Test</button></div>
+  </div>
+
+  <div id="sendresult"></div>
+ </div>
+
+ <!-- ============ BILL — CONFIRM A SHIPMENT (RETURN FEED) ============ -->
+ <h2 class="sec">Confirm a shipment → email the customer (return feed)</h2>
+ <div class="send">
+  <h3>↩︎ Warehouse ship-confirmation test</h3>
+  <p>Simulates Ice Cube confirming <b>“this order shipped, here’s the tracking.”</b> Enter a Shopify order
+     number + UPS tracking. The bridge finds the order and (when live) creates the Shopify fulfillment,
+     which sends the customer their shipping email. <b>Dry-run by default</b> — it looks the order up and
+     shows exactly what it <i>would</i> do without emailing anyone. Tick “go live” only to actually fulfill + email.</p>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+   <label style="font-size:12px;color:#6b5f47">Order #<br><input id="cf_num" placeholder="1002" style="padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit;width:120px"></label>
+   <label style="font-size:12px;color:#6b5f47">Tracking #<br><input id="cf_trk" placeholder="1Z999AA10123456784" style="padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit;width:220px"></label>
+   <label style="font-size:12px;color:#6b5f47">Carrier<br><input id="cf_car" value="UPS" style="padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit;width:90px"></label>
+   <label style="font-size:12.5px;color:#6b5f47;display:flex;align-items:center;gap:5px;padding-bottom:9px"><input type="checkbox" id="cf_live"> go live (email customer)</label>
+   <button onclick="confirmShip(this)" style="padding:9px 16px">Confirm shipment</button>
+  </div>
+  <div id="cfresult" style="margin-top:14px;display:none;border-radius:10px;padding:12px 14px;font-size:13px"></div>
+ </div>
+
+ <!-- ============ WHAT GETS BUILT ============ -->
+ <h2 class="sec">What each order contains</h2>
+ <div class="grid2">
+  <div class="card">
+   <h3>Product SKU map (Shopify → Datex)</h3>
+   <div class="body" style="padding:0">
+    <table>
+     <tr><th>Shopify product</th><th>WMS code</th></tr>
+     <tr><td>Country Sourdough</td><td><span class="tag">BW_CSD</span></td></tr>
+     <tr><td>Seeded Sourdough (half)</td><td><span class="tag">BW_SeedSD</span></td></tr>
+     <tr><td>Cranberry Pecan</td><td><span class="tag">BW_CranPec</span></td></tr>
+     <tr><td>Multigrain Pullman</td><td><span class="tag">BW_MGP</span></td></tr>
+     <tr><td>Demi Baguette (2-pack)</td><td><span class="tag">BW_DB2PK</span></td></tr>
+     <tr><td>Pane Francese</td><td><span class="tag">BW_PFran</span></td></tr>
+     <tr><td>Founder's Box</td><td><span class="tag">BW-BOX-01</span></td></tr>
+    </table>
+   </div>
+  </div>
+  <div class="card">
+   <h3>Auto-injected packaging (every order)</h3>
+   <div class="body" style="padding:0">
+    <table>
+     <tr><th>Item</th><th>Code</th></tr>
+     <tr><td>Shipping box 14×14×14</td><td><span class="tag">BW_BOX14</span></td></tr>
+     <tr><td>Insulation panel A</td><td><span class="tag">BW_GCF1</span></td></tr>
+     <tr><td>Insulation panel B</td><td><span class="tag">BW_GCF2</span></td></tr>
+     <tr><td>Brown freezer paper</td><td><span class="tag">BW_BFP</span></td></tr>
+     <tr><td>Dry ice (5 lb block)</td><td><span class="tag">BW_DRYICE</span></td></tr>
+     <tr><td>Gel packs</td><td><span class="tag">BW_GELPK</span></td></tr>
+     <tr><td class="muted">Welcome booklet <span class="muted">· first order only</span></td><td><span class="tag">BW_WB</span></td></tr>
+    </table>
+   </div>
+  </div>
+ </div>
+
+ <!-- ============ LIVE FOLDER ============ -->
+ <h2 class="sec">Live warehouse folder</h2>
+ <p style="margin:0 0 10px"><button onclick="load()">Refresh now</button>
+    <span class="muted">auto-refreshes every 20s · click any file to view its XML</span></p>
+ <div id="out"></div>
+
+</div>
+<div id="overlay" onclick="if(event.target.id==='overlay')closeV()">
+ <div id="viewer">
+  <div class="vh"><span class="fn" id="vname"></span><span><button class="ghost" onclick="closeV()">Close</button></span></div>
+  <pre id="vbody">loading…</pre>
+ </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script>
+function esc(s){return (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+// Last generated order context, used to build the pick-list PDF.
+let LAST_PICK=null;
+function pickRow(checkbox, qty, name, code){
+ return '<tr><td style="width:26px;text-align:center;font-size:15px">☐</td>'+
+   '<td style="width:44px;font-weight:700">'+(qty!=null?qty+'×':'')+'</td>'+
+   '<td>'+esc(name)+'</td>'+
+   '<td style="text-align:right;color:#7a5c34;font-family:ui-monospace,monospace;font-size:11px">'+esc(code||'')+'</td></tr>';
+}
+function pickListHTML(m,p){
+ const loaves=(p.contents||[]).map(x=>pickRow(true,x.qty,x.desc,x.code)).join('');
+ const dryLine=(p.dryIce&&(p.dryIce.line||((p.dryIce.blocks||1)+' × 5lb block')))||'per label';
+ const pack=[
+   pickRow(true,1,'Shipping box — '+(p.box||'BW_BOX14'),''),
+   pickRow(true,2,'Green Cell Foam insulation panels (A + B)','BW_GCF1/2'),
+   pickRow(true,p.gelPacks||2,'Gel packs','BW_GELPK'),
+   pickRow(true,p.kraftPaper||6,'Kraft paper layers','BW_BFP'),
+   pickRow(true,null,'Dry ice — '+esc(dryLine),'BW_DRYICE'),
+   (p.welcomeBooklet?pickRow(true,1,'Welcome booklet (new customer)','BW_WB'):''),
+   (p.insert!==false?pickRow(true,1,'Info insert (every order)','BW_Infosheet'):'')
+ ].join('');
+ const today=new Date().toLocaleDateString();
+ return ''+
+ '<div style="font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;padding:28px 30px;width:720px">'+
+  '<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #7a5c34;padding-bottom:10px">'+
+    '<div><div style="font-size:22px;font-weight:800;letter-spacing:.02em">🍞 BREADWRIGHT</div>'+
+    '<div style="font-size:13px;color:#7a5c34;font-weight:700;letter-spacing:.14em">PICK &amp; PACK LIST</div></div>'+
+    '<div style="text-align:right;font-size:12px;color:#555">Order <b style="font-size:15px;color:#1a1a1a">#'+esc(m.number)+'</b><br>'+esc(today)+'</div>'+
+  '</div>'+
+  '<table style="width:100%;margin:12px 0 4px;font-size:12.5px"><tr>'+
+    '<td style="vertical-align:top;width:50%"><div style="font-size:10px;letter-spacing:.1em;color:#999;font-weight:700">SHIP TO</div>'+esc(m.name)+'<br>'+esc(m.addr||'')+'</div></td>'+
+    '<td style="vertical-align:top"><div style="font-size:10px;letter-spacing:.1em;color:#999;font-weight:700">DETAILS</div>'+(m.first?'New customer · welcome booklet':'Returning customer')+'<br>'+((p.contents||[]).reduce((s,x)=>s+x.qty,0))+' loaves total</div></td>'+
+  '</tr></table>'+
+  '<div style="background:#f2ead9;color:#7a5c34;font-weight:700;font-size:11px;letter-spacing:.08em;padding:6px 10px;border-radius:4px;margin-top:12px">LOAVES TO PICK</div>'+
+  '<table style="width:100%;border-collapse:collapse;font-size:13px">'+loaves+'</table>'+
+  '<div style="background:#f2ead9;color:#7a5c34;font-weight:700;font-size:11px;letter-spacing:.08em;padding:6px 10px;border-radius:4px;margin-top:14px">PACK WITH</div>'+
+  '<table style="width:100%;border-collapse:collapse;font-size:13px">'+pack+'</table>'+
+  '<div style="margin-top:18px;font-size:11px;color:#888">Packed by: __________________   Date: __________   ☐ Label applied</div>'+
+  '<div style="margin-top:8px;border-top:1px solid #e2d5ba;padding-top:6px;font-size:10px;color:#aaa">Breadwright · Ice Cube Cold Storage · pick list generated '+esc(today)+'</div>'+
+ '</div>';
+}
+function downloadPickList(){
+ if(!LAST_PICK){alert('Generate an order first.');return;}
+ const el=document.createElement('div');
+ el.innerHTML=pickListHTML(LAST_PICK.meta,LAST_PICK.pack);
+ el.style.position='fixed';el.style.left='-9999px';document.body.appendChild(el);
+ const opt={margin:0,filename:'PickList-'+(LAST_PICK.meta.number||'order')+'.pdf',image:{type:'jpeg',quality:.98},html2canvas:{scale:2},jsPDF:{unit:'pt',format:'letter',orientation:'portrait'}};
+ html2pdf().set(opt).from(el.firstChild).save().then(()=>el.remove()).catch(()=>{el.remove();window.print();});
+}
+function packCard(p){
+ if(!p)return '';
+ const c=(p.contents||[]).map(x=>'<li>'+x.qty+'× '+esc(x.desc)+'</li>').join('');
+ return '<div class="packcard"><div class="pc-h">📋 Pack list — Order #'+esc(p.orderNumber)+'</div><div class="pc-b">'+
+  '<div><b>Grab these loaves</b><ul>'+c+'</ul></div>'+
+  '<div><b>Then pack with</b><ul>'+
+   '<li>'+esc(p.box)+'</li>'+
+   '<li>'+esc(p.insulation)+'</li>'+
+   '<li>'+p.gelPacks+'× gel packs</li>'+
+   '<li>'+p.kraftPaper+'× kraft paper (layers)</li>'+
+   '<li>Dry ice: <span class="ice">'+esc(p.dryIce&&p.dryIce.line)+'</span></li>'+
+   (p.welcomeBooklet?'<li>Welcome booklet <span class="muted">(new customer)</span></li>':'')+
+   (p.insert?'<li>Info insert</li>':'')+
+  '</ul></div>'+
+  '<div class="pc-label">🏷️ <b>Shipping label + pick list:</b> generated on print '+
+  '<span class="muted">(ShipStation — pending API keys)</span></div>'+
+ '</div></div>';
+}
+function fmt(t){if(!t)return '';return new Date(t).toLocaleString();}
+function row(folder,f){
+ const isTest=/BW_.*TEST/i.test(f.name);
+ const full=folder.replace(/\/$/,'')+'/'+f.name;
+ const name=f.type==='d'?'<span class="muted">'+esc(f.name)+'/</span>'
+  :'<a onclick="view(\''+full.replace(/'/g,"\\'")+'\')">'+esc(f.name)+'</a>'+(isTest?'<span class="badge">test order</span>':'');
+ return '<tr'+(isTest?' style="background:#fff8e6"':'')+'><td class="file">'+name+'</td><td>'+(f.type==='d'?'dir':(f.size+' B'))+'</td><td class="muted">'+fmt(f.mtime)+'</td></tr>';
+}
+async function load(){
+ document.getElementById('status').textContent='checking…';
+ try{
+  const r=await fetch('?action=list'); const data=await r.json();
+  if(data.error){document.getElementById('out').innerHTML='<div class="card"><div class="errbox">'+esc(data.error)+'</div></div>';return;}
+  const dr=data.dryRun;
+  document.getElementById('statusbar').innerHTML=
+    'Service: <span class="pill green">online</span>'+
+    ' &nbsp; Webhook mode: <span class="pill '+(dr?'amber':'green')+'">'+(dr?'DRY-RUN':'LIVE')+'</span>'+
+    ' &nbsp; Test drops: <span class="pill green">LIVE → /Test</span>'+
+    ' &nbsp; Folder: <b>'+esc(data.outboundDir||'/Test')+'</b>';
+  let html='';
+  for(const [folder,items] of Object.entries(data.folders)){
+   html+='<div class="card"><h3>'+esc(folder)+'</h3>';
+   if(items&&items.error){html+='<div class="errbox">'+esc(items.error)+'</div>';}
+   else if(!items||!items.length){html+='<div class="empty">(empty)</div>';}
+   else{html+='<div class="body" style="padding:0"><table><tr><th>name</th><th>size</th><th>modified</th></tr>'+items.map(f=>row(folder,f)).join('')+'</table></div>';}
+   html+='</div>';
+  }
+  document.getElementById('out').innerHTML=html;
+  document.getElementById('status').textContent='updated '+new Date().toLocaleTimeString();
+ }catch(e){document.getElementById('status').textContent='error: '+e.message;}
+}
+async function loadFixtures(){
+ try{
+  const r=await fetch('?action=fixtures');const d=await r.json();
+  if(!d.fixtures){document.getElementById('fixbtns').innerHTML='<span class="muted">(examples unavailable — is the server redeployed?)</span>';return;}
+  document.getElementById('fixbtns').innerHTML=d.fixtures.map(f=>
+   '<div class="fixbtn" onclick="send(\''+f.id+'\',this)"><b>'+esc(f.label)+'</b>'+
+   '<span>Drops a real Datex XML into /Test</span><div class="go">▶ Send to warehouse</div></div>').join('');
+ }catch(e){document.getElementById('fixbtns').innerHTML='<span class="muted">error: '+esc(e.message)+'</span>';}
+}
+async function send(id,el){
+ const box=document.getElementById('sendresult');
+ box.style.display='block';box.className='';box.innerHTML='Sending…';
+ el.style.pointerEvents='none';el.style.opacity=.6;
+ try{
+  const r=await fetch('?action=send&fixture='+encodeURIComponent(id),{method:'POST'});
+  const d=await r.json();
+  if(!r.ok||d.error){box.className='bad';box.innerHTML='✕ Failed: '+esc(d.error||('HTTP '+r.status));}
+  else{
+   const warn=(d.warnings&&d.warnings.length)?'<div style="color:#8a6d12;margin-top:6px;font-size:12px">⚠ '+d.warnings.map(esc).join('<br>⚠ ')+'</div>':'';
+   const num=d.number||(d.pack&&d.pack.orderNumber)||'';
+   LAST_PICK={meta:{number:num,name:esc(d.fixture),addr:d.shipTo||'',first:d.pack&&d.pack.welcomeBooklet},pack:d.pack};
+   const uniq=d.shipTo?'<div style="margin-top:6px;font-size:12px;color:#2c6e2c">🔑 Unique test order <b>#'+esc(String(num))+'</b> → '+esc(d.shipTo)+'</div>':'';
+   box.className='good';
+   box.innerHTML='✅ <b>Pick list ready</b> — '+esc(d.fixture)+uniq+warn+
+     '<div style="margin:12px 0 4px"><button onclick="downloadPickList()" style="background:#7a5c34;color:#fff;border:0;padding:11px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-size:14px">📄 Download Pick List PDF</button> <span class="muted" style="font-size:12px">— preview below</span></div>'+
+     '<div class="pickpreview">'+pickListHTML(LAST_PICK.meta,LAST_PICK.pack)+'</div>'+
+     '<details style="margin-top:10px"><summary style="cursor:pointer;color:#7a5c34;font-size:12px">Datex XML <span class="muted">(for when the WMS is back online)</span></summary><pre>'+esc(d.xml)+'</pre></details>';
+   load();
+  }
+ }catch(e){box.className='bad';box.innerHTML='✕ '+esc(e.message);}
+ finally{el.style.pointerEvents='';el.style.opacity='';}
+}
+async function view(path){
+ document.getElementById('overlay').style.display='flex';
+ document.getElementById('vname').textContent=path;
+ document.getElementById('vbody').textContent='loading…';
+ try{const r=await fetch('?action=file&path='+encodeURIComponent(path));const t=await r.text();
+  document.getElementById('vbody').textContent=r.ok?t:('ERROR: '+t);}
+ catch(e){document.getElementById('vbody').textContent='ERROR: '+e.message;}
+}
+async function confirmShip(btn){
+ const box=document.getElementById('cfresult');
+ const number=document.getElementById('cf_num').value.trim();
+ const tracking=document.getElementById('cf_trk').value.trim();
+ const carrier=document.getElementById('cf_car').value.trim()||'UPS';
+ const live=document.getElementById('cf_live').checked;
+ box.style.display='block';
+ if(!number||!tracking){box.style.background='#f6e3e3';box.style.border='1px solid #e2b8b8';box.style.color='#a12b2b';box.innerHTML='Enter both order # and tracking #.';return;}
+ box.style.background='#faf4e8';box.style.border='1px solid #d8c3a4';box.style.color='#5a4a2c';box.innerHTML='Working…';
+ btn.disabled=true;
+ try{
+  const r=await fetch('?action=confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({number,tracking,carrier,live})});
+  const d=await r.json();
+  if(!r.ok||d.ok===false||d.error){
+   box.style.background='#f6e3e3';box.style.border='1px solid #e2b8b8';box.style.color='#a12b2b';
+   box.innerHTML='✕ '+esc(d.error||('HTTP '+r.status));
+  }else{
+   const p=d.plan||{};
+   const mode=d.dryRun?('<span class="badge">'+(d.simulated?'SIMULATED — not yet linked to Shopify':'DRY-RUN — no email sent')+'</span>'):'<span style="background:#d8ecd8;color:#1f6b28;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600">LIVE — customer emailed</span>';
+   box.style.background='#eaf6ea';box.style.border='1px solid #bfe0c4';box.style.color='#2c2418';
+   box.innerHTML='✅ Order <b>'+esc(p.name||number)+'</b> matched. Tracking <span class="mono">'+esc(p.tracking||tracking)+'</span> · '+esc(p.carrier||carrier)+' '+mode;
+  }
+ }catch(e){box.style.background='#f6e3e3';box.style.border='1px solid #e2b8b8';box.style.color='#a12b2b';box.innerHTML='✕ '+esc(e.message);}
+ finally{btn.disabled=false;}
+}
+function closeV(){document.getElementById('overlay').style.display='none';}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeV();});
+const G_PRODUCTS=[
+ ['the-breadwright-founders-box','BW-BOX-01',"Founder's Box (7 loaves — Seeded Sourdough ×2)"],
+ ['country-sourdough','',"Country Sourdough"],
+ ['seeded-sourdough','',"Seeded Sourdough (half)"],
+ ['cranberry-pecan','',"Cranberry Pecan"],
+ ['multigrain-pullman','',"Multigrain Pullman"],
+ ['french-baguette','',"Demi Baguette (2-pack)"],
+ ['pane-francese','',"Pane Francese"],
+];
+function itemRow(sel,qty){
+ const opts=G_PRODUCTS.map(p=>'<option value="'+p[0]+'" data-sku="'+p[1]+'"'+(p[0]===sel?' selected':'')+'>'+esc(p[2])+'</option>').join('');
+ return '<div class="girow"><select class="g-prod">'+opts+'</select><input type="number" class="g-qty" min="1" value="'+(qty||1)+'"><button type="button" class="ghost" onclick="this.parentNode.remove()">✕</button></div>';
+}
+function addItem(sel,qty){document.getElementById('g-items').insertAdjacentHTML('beforeend',itemRow(sel,qty));}
+async function generateOrder(btn){
+ const box=document.getElementById('sendresult');box.style.display='block';box.className='';box.innerHTML='Generating…';btn.disabled=true;
+ try{
+  const name=(document.getElementById('g-name').value||'Test Customer').trim();
+  const parts=name.split(/\s+/); const first=parts.shift()||'Test'; const last=parts.join(' ')||'Customer';
+  const addr={first_name:first,last_name:last,address1:document.getElementById('g-addr').value,city:document.getElementById('g-city').value,province_code:(document.getElementById('g-state').value||'').toUpperCase(),zip:document.getElementById('g-zip').value,country_code:'US'};
+  const items=[...document.querySelectorAll('#g-items .girow')].map(r=>{const s=r.querySelector('.g-prod');const o=s.options[s.selectedIndex];return {handle:s.value,sku:o.getAttribute('data-sku')||'',title:o.textContent,quantity:parseInt(r.querySelector('.g-qty').value,10)||1};});
+  if(!items.length){box.className='bad';box.innerHTML='✕ Add at least one item.';btn.disabled=false;return;}
+  const num='DEMO'+Math.floor(Math.random()*9000+1000);
+  const order={name:'#'+num,order_number:num,email:document.getElementById('g-email').value,customer:{first_name:first,last_name:last,orders_count:document.getElementById('g-first').checked?1:2},billing_address:addr,shipping_address:addr,line_items:items};
+  const r=await fetch('?action=generate&send=1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(order)});
+  const d=await r.json();
+  if(!r.ok||d.error){box.className='bad';box.innerHTML='✕ Failed: '+esc(d.error||('HTTP '+r.status));}
+  else{
+   const warn=(d.warnings&&d.warnings.length)?'<div style="color:#8a6d12;margin-top:6px;font-size:12px">⚠ '+d.warnings.map(esc).join('<br>⚠ ')+'</div>':'';
+   const addrStr=addr.address1+', '+addr.city+' '+addr.province_code+' '+addr.zip;
+   LAST_PICK={meta:{number:d.number,name:name,addr:addrStr,first:document.getElementById('g-first').checked},pack:d.pack};
+   box.className='good';
+   box.innerHTML='✅ <b>Pick list ready</b> — Order #'+esc(d.number)+warn+
+     '<div style="margin:12px 0 4px"><button onclick="downloadPickList()" style="background:#7a5c34;color:#fff;border:0;padding:11px 20px;border-radius:8px;font-weight:700;cursor:pointer;font-size:14px">📄 Download Pick List PDF</button> <span class="muted" style="font-size:12px">— preview below</span></div>'+
+     '<div class="pickpreview">'+pickListHTML(LAST_PICK.meta,LAST_PICK.pack)+'</div>'+
+     '<details style="margin-top:10px"><summary style="cursor:pointer;color:#7a5c34;font-size:12px">Datex XML <span class="muted">(for when the WMS is back online)</span></summary><pre>'+esc(d.xml)+'</pre></details>';
+   load();
+  }
+ }catch(e){box.className='bad';box.innerHTML='✕ '+esc(e.message);}
+ finally{btn.disabled=false;}
+}
+addItem('the-breadwright-founders-box',1);
+load();loadFixtures();setInterval(load,20000);
+</script></body></html>
