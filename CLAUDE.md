@@ -4,11 +4,22 @@ Auto-loaded by Claude Code when working in this repo. If you're a fresh Claude
 session picking this up: read this file first, then `FOR-MUHAMMAD.md` (overview),
 `NEEDS-FROM-BILL.md` (open questions), and `README.md` (how to run).
 
-## ⚠️ Canonical surface (2026-08-14)
-The old PHP console at **dynaradigital.com/breadwright is RETIRED — do not use or
-update it.** Everything now lives at **https://api.breadwright.com** (the Railway
-node app): status peek, test-order drops, pack lists, batch trigger, and the
-operator dashboard. `deploy/breadwright-status.php` is legacy/dead; ignore it.
+## ⚠️ Surfaces (corrected 2026-08-14)
+- **Operator console = the PHP dashboard, LIVE at https://api.breadwrightbox.com**
+  (Apache/PHP on a DigitalOcean box, 67.205.31.25). This is the panel Justin uses.
+  It moved here FROM the old dynaradigital.com/breadwright (that old URL is dead).
+  The PHP is a thin proxy: it forwards `?action=` calls to the Railway API and
+  injects PEEK_KEY server-side. Source of truth for THIS file =
+  `deploy/breadwright-status.php`, but the LIVE copy on the DO host may run ahead —
+  pull before overwriting.
+- **API backend = the Railway node app** (`breadwright-3pl-production.up.railway.app`).
+  All logic lives here: /peek, /peek/send-test (now unique #+address per drop),
+  /peek/generate, pack lists, batch. The PHP console gets every backend fix for
+  free because it proxies here.
+- The Railway app ALSO now serves its own built-in console at `/` (src/dashboard.js,
+  password `Bready`) as a self-contained backup — reachable at the Railway URL.
+- NOTE: `api.breadwright.com` (no "box") is NOT ours — breadwright.com is
+  unregistered. Do not use it.
 
 ## What this is
 A bridge between **Breadwright's Shopify** (`breadwright-3.myshopify.com` /
