@@ -32,15 +32,19 @@ const ADDR02 = {
   address1: '88 Elm St', city: 'Cambridge', province_code: 'MA', zip: '02139', country_code: 'US',
 };
 
+// Unique per-run suffix so a re-fired BILL01/BILL02 never collides with one Bill
+// already imported (Datex rejects duplicate order numbers).
+const STAMP = new Date().toISOString().replace(/[-:T]/g, '').slice(8, 14); // hhmmss
+
 // Two representative TEST orders, Shopify-shaped (fed through normalizeOrder).
 const RAW = [
   {
-    name: '#BILL01', email: 'bill.test@breadwrightbox.com',
+    name: `#BILL01-${STAMP}`, email: 'bill.test@breadwrightbox.com',
     shipping_address: ADDR01, billing_address: ADDR01,
     line_items: [{ sku: 'BW-BOX-01', title: "The Breadwright Founder's Box", quantity: 1 }], // -> 6 loaves
   },
   {
-    name: '#BILL02', email: 'bill.test@breadwrightbox.com',
+    name: `#BILL02-${STAMP}`, email: 'bill.test@breadwrightbox.com',
     shipping_address: ADDR02, billing_address: ADDR02,
     line_items: [
       { handle: 'country-sourdough', title: 'Country Sourdough', quantity: 2 },
