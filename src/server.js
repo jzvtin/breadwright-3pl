@@ -94,7 +94,8 @@ app.post('/peek/send-test', async (req, res) => {
     const filename = `BW_${order.number}_TEST_${stamp}.xml`;
     const drop = await sendToTest(filename, xml);
     console.log(`[send-test] dropped ${filename} -> ${drop.dir}`);
-    res.json({ ok: true, fixture: which.label, filename, warnings, pack, xml, ...drop });
+    const slipHtml = packSlipHtml(pack, order);
+    res.json({ ok: true, fixture: which.label, filename, warnings, pack, xml, slipHtml, ...drop });
   } catch (e) {
     console.error('[send-test] FAILED:', e);
     res.status(500).json({ error: e.message });
@@ -192,7 +193,8 @@ app.post('/peek/generate', async (req, res) => {
       drop = await sendToTest(filename, xml);
       console.log(`[generate] dropped ${filename} -> ${drop.dir}`);
     }
-    res.json({ ok: true, number: order.number, warnings, pack, xml, drop });
+    const slipHtml = packSlipHtml(pack, order);
+    res.json({ ok: true, number: order.number, warnings, pack, xml, slipHtml, drop });
   } catch (e) {
     console.error('[generate] FAILED:', e);
     res.status(500).json({ error: e.message });
