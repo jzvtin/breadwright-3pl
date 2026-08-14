@@ -4,12 +4,12 @@
  * (ship confirmations w/ tracking, maybe inventory), and write fulfillment +
  * tracking into Shopify.
  *
- * ⚠️ We do NOT yet have a sample of the return file, so parseReturnFile() is a
- * best-guess placeholder. CONFIRM the return schema with Bill, then finish it.
- * Run as a Railway cron ("*/10 * * * *") or a setInterval in server.js.
+ * Schema confirmed with Bill (2026-08-11): OrderReference == our order number,
+ * tracking in TrackingNumber/VendorReference, carrier in CarrierLookupCode.
+ * Run as a Railway cron (every 10 min) or a setInterval in server.js.
  */
 const { fetchReturnFiles, archiveReturnFile } = require('./sftp');
-const { createFulfillment } = require('./shopify');
+const { confirmShipment } = require('./shopify');
 
 /**
  * Best-guess parser. The outbound sample carried the tracking number in
@@ -18,9 +18,11 @@ const { createFulfillment } = require('./shopify');
  * Replace the regexes with a real XML parse once the schema is confirmed.
  */
 function parseReturnFile(xml) {
-  const orderNumber = (xml.match(/<LookupCode>([^<]+)<\/LookupCode>/) || [])[1];
-  const tracking = (xml.match(/<VendorReference>([^<]+)<\/VendorReference>/) || [])[1];
-  const carrier = (xml.match(/<CarrierLookupCode>([^<]+)<\/CarrierLookupCode>/) || [])[1];
+  const orderNumber = (xml.match(/<OrderReference>([^<]+)<\/OrderReference>/) || [])[1]
+    || (xml.match(/<LookupCode>([^<]+)<\/LookupCode>/) || [])[1];
+  const tracking = (xml.match(/<TrackingNumber>([^<]+)<\/TrackingNumber>/) || [])[1]
+    || (xml.match(/<VendorReference>([^<]+)<\/VendorReference>/) || [])[1];
+  const carrier = (xml.match(/<CarrierLookupCode>([^<]+)<\/CarrierLookupCode>/) || [])[1] || 'UPS';
   return { orderNumber, tracking, carrier };
 }
 
@@ -34,12 +36,14 @@ async function runOnce() {
         console.warn(`[poller] ${f.name}: no tracking/order — skipping (schema differs?)`);
         continue;
       }
-      // Needs a Shopify order-number -> fulfillmentOrderId lookup, added once we
-      // confirm the return format. Stubbed to make the wiring explicit:
-      // const foId = await lookupFulfillmentOrderId(parsed.orderNumber);
-      // await createFulfillment({ fulfillmentOrderId: foId, trackingNumber: parsed.tracking, trackingCompany: parsed.carrier });
-      console.log(`[poller] ${f.name}: order ${parsed.orderNumber} tracking ${parsed.tracking} (write-back TODO)`);
-      await archiveReturnFile(f.name);
+      const dryRun = process.env.DRY_RUN === '1' || !process.env.SHOPIFY_ADMIN_TOKEN;
+      const r = await confirmShipment({ number: parsed.orderNumber, tracking: parsed.tracking, carrier: parsed.carrier, dryRun });
+      if (r.ok) {
+        console.log('[poller] ' + f.name + ': order ' + parsed.orderNumber + ' -> ' + (r.dryRun ? 'DRY-RUN (would email)' : 'fulfilled + emailed'));
+      } else {
+        console.warn('[poller] ' + f.name + ': ' + r.error);
+      }
+      if (r.ok && !r.dryRun) await archiveReturnFile(f.name);
     } catch (err) {
       console.error(`[poller] ${f.name} failed:`, err);
     }

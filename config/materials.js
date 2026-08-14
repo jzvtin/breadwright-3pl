@@ -24,6 +24,11 @@ const CONSTANTS = {
   userCodeInbound: 'JP+', //    inbound sample used this
   orderClassOutbound: 'BW', //  customer order
   orderClassInbound: 'PO', //   inbound stock / ASN
+  // Default carrier stamped on outbound shipments. Breadwright ships UPS.
+  defaultCarrier: 'UPS Air',
+  // OwnerReference = a fixed 6-char to/from-Ice-Cube tag (Bill: NOT the order number,
+  // "whatever you want"). Order number rides in LookupCode. Bill's sample used ICCS.
+  ownerReference: 'BWICCS',
 };
 
 // Breadwright's own billing/return address (from the inbound samples).
@@ -79,17 +84,22 @@ const CASE_PACK = {
  *   - Ship as kit:  'founders-box': { kit: 'BW_FOUNDERS' }
  *   - Explode:      'founders-box': { explode: [['BW_CSD',1],['BW_MGP',1], ...] }
  */
+// The Breadwright Founder's Box recipe — CONFIRMED 2026-08-04 (Bill/Justin).
+// The box EXPLODES into these component loaves on the order (not one kit code),
+// so the warehouse picks the exact loaves. 6 loaf units total (Seeded SD x2).
+const FOUNDERS_BOX = [
+  ['BW_CSD', 1], //     Country Sourdough
+  ['BW_PFran', 1], //   Pane Francese
+  ['BW_MGP', 1], //     Multigrain Pullman
+  ['BW_CranPec', 1], // Cranberry Pecan (1#)
+  ['BW_DB2PK', 1], //   Demi Baguette 2-Pack
+  ['BW_SeedSD', 2], //  Seeded Sourdough Half Loaf x2
+];
+
 const KITS = {
   // Keyed by Shopify HANDLE or SKU (resolver checks both).
-  // The Breadwright Founder's Box (Shopify SKU BW-BOX-01) = "six artisan loaves".
-  // Muhammad's SKU sheet has NO box material code, so this is UNCONFIRMED — we
-  // currently ship it as a single kit code and assume Datex has a matching
-  // kit/BOM that explodes it warehouse-side. If Datex rejects it, switch to
-  // `explode` with the real recipe.
-  //   ship as kit:  { kit: 'BW-BOX-01' }
-  //   explode:      { explode: [['BW_CSD',1],['BW_MGP',1], ...] }
-  'BW-BOX-01': { kit: 'BW-BOX-01' }, //             CONFIRM: real WMS code + kit-vs-explode
-  'the-breadwright-founders-box': { kit: 'BW-BOX-01' },
+  'BW-BOX-01': { explode: FOUNDERS_BOX },
+  'the-breadwright-founders-box': { explode: FOUNDERS_BOX },
 };
 
 /**
@@ -110,14 +120,37 @@ const KITS = {
  *   - BW_BFP: freezer paper sheets — likely 1 per loaf; CONFIRM.
  *   - BW_Infosheet: does it ship in EVERY order? (was NOT in the outbound sample).
  */
+// CONFIRMED 2026-08-04 (Bill/Justin). Insulation = Green Cell Foam (GCF), 1"
+// thick, inside a normal cardboard box. Kraft/freezer paper (BW_BFP) and dry ice
+// (BW_DRYICE) are NOT here — they're injected dynamically in buildOrder.js:
+// paper scales per loaf (the layers, ~4-6), dry ice is computed from the
+// destination zone + heat (see config/dryice.js).
 const PACKAGING = [
-  { code: 'BW_BOX14', qty: 1 }, //   Shipping Box 14x14x14 (one per order)
-  { code: 'BW_GCF1', qty: 1 }, //    Insulation Side A (T/LS/B) — CONFIRM count
-  { code: 'BW_GCF2', qty: 1 }, //    Insulation Side B (S/LS/S) — CONFIRM count
-  { code: 'BW_BFP', qty: 1 }, //     Brown Freezer Paper — CONFIRM (per loaf?)
-  { code: 'BW_DRYICE', qty: 1 }, //  Dry Ice Block 5lb — CONFIRM zone-based qty
-  { code: 'BW_GELPK', qty: 1 }, //   Gel Packs 1.5lb — CONFIRM qty
-  // { code: 'BW_Infosheet', qty: 1 }, // CONFIRM: every order? not in outbound sample
+  { code: 'BW_BOX14', qty: 1 }, //     Cardboard shipping box 14x14x14
+  // Green Cell Foam — currently TWO grouped SKUs (each = 3 panels). Bill 08-11
+  // wants a SEPARATE SKU per panel (top / long side / bottom / side). Those
+  // per-panel codes don't exist in Datex yet — when Bill creates them, replace
+  // these two lines with one per panel + qty, e.g.:
+  //   { code: 'BW_GCF_TOP', qty: 1 }, { code: 'BW_GCF_BOT', qty: 1 },
+  //   { code: 'BW_GCF_LS',  qty: 2 }, { code: 'BW_GCF_SIDE', qty: 2 },
+  { code: 'BW_GCF1', qty: 1 }, //      Green Cell Foam set 1 — Top/Long Side/Bottom (Datex-confirmed 08-11)
+  { code: 'BW_GCF2', qty: 1 }, //      Green Cell Foam set 2 — Side/Long Side/Side (Datex-confirmed 08-11)
+  { code: 'BW_GELPK', qty: 2 }, //     Gel packs — 2 per box, standard every order
+  // NOTE (Justin 2026-08-13): the Datex XML inventory-picks ONLY box + GCF1 +
+  // GCF2 + gel + the loaves. EVERYTHING ELSE is ShipStation-only (info sheet,
+  // freezer paper, first-order welcome note) — see SHIPSTATION_EXTRAS below.
+];
+
+/**
+ * SHIPSTATION-ONLY ride-alongs. NOT picked from Datex inventory, so NOT emitted
+ * as Datex order lines — they appear only on the ShipStation packing list.
+ * `perLoaf: true` => quantity scales to the number of loaf units in the order.
+ */
+const SHIPSTATION_EXTRAS = [
+  { code: 'BW_Infosheet', label: 'info sheet', qty: 1 }, //          every order
+  // Freezer paper (BW_BFP) HELD OUT entirely 2026-08-13 (Justin) until dry ice
+  // is figured out — not in the XML, not on the ShipStation list. Re-add here.
+  { code: 'BW_WB', label: 'welcome note', qty: 1, firstOrder: true }, // first order only
 ];
 
 /**
@@ -164,13 +197,39 @@ function resolveMaterial(lineItem) {
   return { unknown: handle || sku || lineItem.title || '(no id)' };
 }
 
+/**
+ * Shipping SERVICE LEVEL for <VendorReference> (Bill wants "1 Day" / "2 Day" etc.,
+ * NOT tracking). Derived from the shipping method the customer picked at checkout
+ * (Shopify shipping_lines). Matching is case-insensitive substring on title+code.
+ * CONFIRM exact strings Datex expects and add any real shipping-method names below.
+ */
+// Bill (Ice Cube, 2026-08-13) — VendorReference = shipping time, ONLY TWO valid
+// values: 1_DAY / 2_DAY. No 3_DAY, no AIR, no "ground". Anything else -> DEFAULT.
+const SERVICE_LEVELS = [
+  { match: ['next day', 'overnight', '1 day', 'nextday', 'next_day', '1_day'], value: '1_DAY' },
+  { match: ['2 day', '2day', 'second day', 'two day', '2_day'], value: '2_DAY' },
+];
+const DEFAULT_SERVICE_LEVEL = '2_DAY'; // fallback when no method matches
+
+/** Map a Shopify order's shipping_lines to Bill's service-level string. */
+function resolveServiceLevel(shippingLines) {
+  const first = Array.isArray(shippingLines) ? shippingLines[0] : null;
+  const hay = `${(first && first.title) || ''} ${(first && first.code) || ''}`.toLowerCase();
+  for (const s of SERVICE_LEVELS) if (s.match.some((m) => hay.includes(m))) return s.value;
+  return DEFAULT_SERVICE_LEVEL;
+}
+
 module.exports = {
   CONSTANTS,
   BREADWRIGHT_ACCOUNT,
+  SERVICE_LEVELS,
+  DEFAULT_SERVICE_LEVEL,
+  resolveServiceLevel,
   LOAVES,
   CASE_PACK,
   KITS,
   PACKAGING,
+  SHIPSTATION_EXTRAS,
   FIRST_ORDER_INSERTS,
   ORDER_UDFS,
   INBOUND_UDFS,

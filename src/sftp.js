@@ -109,6 +109,31 @@ async function peekList(dirs) {
   }
 }
 
+/**
+ * LIVE test-drop. ALWAYS writes to the real SFTP outbound dir (/Test),
+ * independent of DRY_RUN — this is the "send Bill a real order" button. Lists
+ * the folder before + after so the caller can prove the file landed.
+ * Returns { remote, dir, before, after }.
+ */
+async function sendToTest(filename, xml) {
+  const c = cfg();
+  const Client = require('ssh2-sftp-client');
+  const sftp = new Client();
+  await sftp.connect({ host: c.host, port: c.port, username: c.username, password: c.password });
+  try {
+    const dir = c.outboundDir;
+    const snap = async () =>
+      (await sftp.list(dir)).map((f) => ({ name: f.name, type: f.type, size: f.size, mtime: f.modifyTime }));
+    const before = await snap();
+    const remote = `${dir}/${filename}`;
+    await sftp.put(Buffer.from(xml, 'utf8'), remote);
+    const after = await snap();
+    return { remote, dir, before, after };
+  } finally {
+    await sftp.end();
+  }
+}
+
 async function peekFile(remotePath) {
   const c = cfg();
   const Client = require('ssh2-sftp-client');
@@ -121,4 +146,4 @@ async function peekFile(remotePath) {
   }
 }
 
-module.exports = { putXml, fetchReturnFiles, archiveReturnFile, peekList, peekFile, DRY_RUN };
+module.exports = { putXml, fetchReturnFiles, archiveReturnFile, peekList, peekFile, sendToTest, DRY_RUN };
