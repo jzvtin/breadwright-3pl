@@ -21,21 +21,27 @@ try {
   }
 } catch (_) {}
 
-const TEST_ADDR = {
-  first_name: 'Bill', last_name: 'Turgeon (TEST)', phone: '5085550100',
-  address1: '451 Currant Rd', city: 'Fall River', province_code: 'MA', zip: '02720', country_code: 'US',
+// Datex rejects duplicate order# / ship-to — each test order gets its OWN
+// unique number + distinct address (Bill 2026-08-14).
+const ADDR01 = {
+  first_name: 'John', last_name: 'Smith', phone: '5085550100',
+  address1: '12 Baker St', city: 'Boston', province_code: 'MA', zip: '02108', country_code: 'US',
+};
+const ADDR02 = {
+  first_name: 'Emily', last_name: 'Carter', phone: '5085550101',
+  address1: '88 Elm St', city: 'Cambridge', province_code: 'MA', zip: '02139', country_code: 'US',
 };
 
 // Two representative TEST orders, Shopify-shaped (fed through normalizeOrder).
 const RAW = [
   {
     name: '#BILL01', email: 'bill.test@breadwrightbox.com',
-    shipping_address: TEST_ADDR, billing_address: TEST_ADDR,
+    shipping_address: ADDR01, billing_address: ADDR01,
     line_items: [{ sku: 'BW-BOX-01', title: "The Breadwright Founder's Box", quantity: 1 }], // -> 6 loaves
   },
   {
     name: '#BILL02', email: 'bill.test@breadwrightbox.com',
-    shipping_address: TEST_ADDR, billing_address: TEST_ADDR,
+    shipping_address: ADDR02, billing_address: ADDR02,
     line_items: [
       { handle: 'country-sourdough', title: 'Country Sourdough', quantity: 2 },
       { handle: 'multigrain-pullman', title: 'Multigrain Pullman', quantity: 1 },

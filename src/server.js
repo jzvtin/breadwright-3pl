@@ -26,6 +26,53 @@ const TEST_FIXTURES = {
   'six-loaf': { file: 'sample-shopify-order.json', label: 'Six single loaves (#13532 · Melrose MA)' },
 };
 
+// --- Unique test-order guard ---------------------------------------------
+// Datex FootPrint rejects an import whose order number OR ship-to collides with
+// one already in the WMS (Bill 2026-08-14: a re-fired #1002 failed as a dup).
+// Every test drop therefore gets a fresh numeric order number AND a distinct,
+// valid MA ship-to. Real customer orders never pass through here.
+const TEST_SHIPTOS = [
+  { first_name: 'John',   last_name: 'Smith',    address1: '12 Baker St',        city: 'Boston',      province_code: 'MA', zip: '02108' },
+  { first_name: 'Emily',  last_name: 'Carter',   address1: '88 Elm St',          city: 'Cambridge',   province_code: 'MA', zip: '02139' },
+  { first_name: 'David',  last_name: 'Nguyen',   address1: '145 Highland Ave',   city: 'Somerville',  province_code: 'MA', zip: '02143' },
+  { first_name: 'Sarah',  last_name: 'OBrien',   address1: '27 Pleasant St',     city: 'Worcester',   province_code: 'MA', zip: '01609' },
+  { first_name: 'Marcus', last_name: 'Bell',     address1: '310 Chestnut St',    city: 'Springfield', province_code: 'MA', zip: '01104' },
+  { first_name: 'Aisha',  last_name: 'Patel',    address1: '64 Maple Ave',       city: 'Lowell',      province_code: 'MA', zip: '01852' },
+  { first_name: 'Tom',    last_name: 'Reilly',   address1: '9 Beach St',         city: 'Quincy',      province_code: 'MA', zip: '02169' },
+  { first_name: 'Grace',  last_name: 'Kim',      address1: '201 Union St',       city: 'New Bedford', province_code: 'MA', zip: '02740' },
+];
+let TEST_SEQ = 0;
+// Rewrite a Shopify-shaped raw order so it is guaranteed unique on this drop:
+// numeric order number `<base><hhmmss><seq>` and a rotating distinct ship-to
+// (persona + `Unit <tag>` so the literal address never repeats). If keepAddr is
+// true (custom dashboard order), keep the typed address but still force a unique
+// number and stamp address2 so two identical inputs don't collide in Datex.
+function uniqueTestOrder(raw, { keepAddr = false } = {}) {
+  const now = new Date();
+  const hhmmss = now.toISOString().replace(/[-:T]/g, '').slice(8, 14); // hhmmss
+  const seq = TEST_SEQ++ % 1000;
+  const tag = `${hhmmss}${seq}`;
+  const base = String(raw.order_number || (raw.name || '').replace(/[^0-9]/g, '') || '1000');
+  const number = `${base}${tag}`;
+  const persona = TEST_SHIPTOS[seq % TEST_SHIPTOS.length];
+  let ship, bill;
+  if (keepAddr) {
+    const src = raw.shipping_address || raw.billing_address || {};
+    ship = bill = { ...src, address2: src.address2 || `Unit ${tag}`, country_code: src.country_code || 'US' };
+  } else {
+    ship = bill = { ...persona, address2: `Unit ${tag}`, country_code: 'US', phone: '5085550100' };
+  }
+  return {
+    ...raw,
+    name: `#${number}`,
+    order_number: number,
+    customer: keepAddr ? raw.customer : { ...(raw.customer || {}), first_name: ship.first_name, last_name: ship.last_name },
+    billing_address: bill,
+    shipping_address: ship,
+  };
+}
+// -------------------------------------------------------------------------
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -87,15 +134,17 @@ app.post('/peek/send-test', async (req, res) => {
   const which = TEST_FIXTURES[req.query.fixture] || TEST_FIXTURES['founders-box'];
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures', which.file), 'utf8'));
-    const order = normalizeOrder(raw);
+    // Force a unique order number + distinct ship-to so Datex never rejects a
+    // re-fired test as a duplicate (Bill 2026-08-14).
+    const order = normalizeOrder(uniqueTestOrder(raw));
     const { xml, warnings, pack } = buildCustomerOrder(order);
-    // Unique-ish name so repeated live tests don't overwrite each other.
     const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
     const filename = `BW_${order.number}_TEST_${stamp}.xml`;
     const drop = await sendToTest(filename, xml);
-    console.log(`[send-test] dropped ${filename} -> ${drop.dir}`);
+    console.log(`[send-test] dropped ${filename} (#${order.number} -> ${order.shipping.city}) -> ${drop.dir}`);
     const slipHtml = packSlipHtml(pack, order);
-    res.json({ ok: true, fixture: which.label, filename, warnings, pack, xml, slipHtml, ...drop });
+    const shipTo = `${order.shipping.accountName} — ${order.shipping.addressLine1}, ${order.shipping.city} ${order.shipping.state} ${order.shipping.postalCode}`;
+    res.json({ ok: true, fixture: which.label, number: order.number, shipTo, filename, warnings, pack, xml, slipHtml, ...drop });
   } catch (e) {
     console.error('[send-test] FAILED:', e);
     res.status(500).json({ error: e.message });
@@ -176,7 +225,10 @@ app.get('/packslip/:id', (req, res) => {
 app.post('/peek/generate', async (req, res) => {
   if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
   try {
-    const raw = req.body && req.body.order ? req.body.order : req.body;
+    const rawIn = req.body && req.body.order ? req.body.order : req.body;
+    // A custom order that will actually be SENT to Bill must also be unique.
+    // Keep the operator's typed address, but force a unique number + stamp.
+    const raw = req.query.send === '1' ? uniqueTestOrder(rawIn, { keepAddr: true }) : rawIn;
     const order = normalizeOrder(raw);
     // Resolve live dry-ice conditions (weather + calendar-aware transit) so the
     // pack sheet shows the weather-driven amount. Never blocks: degrades to the
