@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
-const { verifyWebhook, normalizeOrder, confirmShipment, fetchOrderRawByNumber } = require('./shopify');
+const { verifyWebhook, normalizeOrder, confirmShipment, fetchOrderRawByNumber, fetchOrdersForBatch, tagOrderSent } = require('./shopify');
 const { buildCustomerOrder } = require('./xml/buildOrder');
 const { packSlipHtml } = require('./packslip');
 const { resolveDryIceConditions } = require('../config/dryice');
@@ -151,6 +151,79 @@ app.post('/peek/send-test', async (req, res) => {
     res.json({ ok: true, fixture: which.label, number: order.number, shipTo, filename, warnings, pack, xml, slipHtml, ...drop });
   } catch (e) {
     console.error('[send-test] FAILED:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// REVIEW QUEUE (pull-on-demand + human confirm). Nothing here auto-sends.
+//   GET  /peek/pending          -> today's paid/unshipped/un-3pl-sent orders,
+//                                  each with generated XML + pack list + warnings
+//                                  + a `blocking` list (empty => safe to send).
+//   POST /peek/confirm-send      -> re-build one order, drop it to Ice Cube, tag
+//                                  it 3pl-sent. Server RE-CHECKS blocking and
+//                                  refuses (409) — never trusts the client button.
+// Both key-gated; the key stays server-side in the console proxy. Requires a
+// valid SHOPIFY_ADMIN_TOKEN (read_orders + write_orders). Idempotent via the
+// Shopify `3pl-sent` tag, so a double-click / restart cannot double-drop.
+// ---------------------------------------------------------------------------
+app.get('/peek/pending', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  const windowHours = Math.min(Math.max(Number(req.query.hours) || 25, 1), 24 * 30);
+  try {
+    const raws = await fetchOrdersForBatch({ windowHours, sentTag: '3pl-sent' });
+    const orders = raws.map((raw) => {
+      const order = normalizeOrder(raw);
+      const { xml, warnings, blocking, pack } = buildCustomerOrder(order);
+      const s = order.shipping || {};
+      return {
+        number: order.number,
+        orderId: order.orderId,
+        customer: s.accountName || '',
+        city: s.city || '',
+        state: s.state || '',
+        serviceLevel: order.serviceLevel,
+        isFirstOrder: !!order.isFirstOrder,
+        warnings,
+        blocking,
+        canSend: (blocking || []).length === 0,
+        pack,
+        xml,
+      };
+    });
+    res.json({ dryRun: DRY_RUN, windowHours, count: orders.length, orders });
+  } catch (e) {
+    console.error('[pending] FAILED:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/peek/confirm-send', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  const number = String(req.query.number || (req.body && req.body.number) || '').trim();
+  if (!number) return res.status(400).json({ error: 'missing ?number=<order number>' });
+  try {
+    const raw = await fetchOrderRawByNumber(number);
+    if (!raw) return res.status(404).json({ error: `order #${number} not found` });
+    const order = normalizeOrder(raw);
+    // Idempotency: never drop the same order twice (survives restarts via the tag).
+    if (alreadySent(order.orderId)) return res.json({ ok: true, already: true, number: order.number });
+    order.dryIceConditions = await resolveDryIceConditions({ zip: order.shipping && order.shipping.postalCode });
+    const { xml, warnings, blocking, pack } = buildCustomerOrder(order);
+    // Defense in depth: the console disables Confirm on blocked orders, but the
+    // server must refuse independently so bad data can never reach Ice Cube.
+    if ((blocking || []).length) return res.status(409).json({ error: 'order is blocked', blocking, number: order.number });
+    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+    const filename = `BW_${order.number}_${stamp}.xml`;
+    const drop = await putXml(filename, xml);
+    markSent(order.orderId, { number: order.number, filename, at: new Date().toISOString() });
+    let tagged = false;
+    try { await tagOrderSent(order.orderId); tagged = true; }
+    catch (e) { warnings.push(`Dropped OK but Shopify tagging failed: ${e.message}`); }
+    console.log(`[confirm-send] dropped ${filename} (#${order.number}) -> ${JSON.stringify(drop)}`);
+    res.json({ ok: true, number: order.number, filename, drop, tagged, warnings, pack });
+  } catch (e) {
+    console.error('[confirm-send] FAILED:', e);
     res.status(500).json({ error: e.message });
   }
 });
