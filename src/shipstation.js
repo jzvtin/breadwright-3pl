@@ -147,7 +147,10 @@ function buildTestShipment(order, opts = {}) {
       address_residential_indicator: 'yes',
     },
     items,
-    packages: [{ weight: { value: round1(totalOz), unit: 'ounce' } }],
+    // 14x14x14 ship box (materials.js BW_BOX14). Dimensions MUST ride on every
+    // shipment or ShipStation rate-shops against a weight UPS won't honor and you
+    // get billed the dimensional-weight difference later (Ship Day Manifest, Q11).
+    packages: [{ weight: { value: round1(totalOz), unit: 'ounce' }, dimensions: { unit: 'inch', length: 14, width: 14, height: 14 } }],
     internal_notes:
       `TEST order. Ship days: ${serviceLevel}. OwnerRef ${ownerRef}. ` +
       `Pick items = loaves + box + GCF1 + GCF2 + 2 gel packs. ` +
