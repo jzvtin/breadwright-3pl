@@ -92,7 +92,7 @@ const PACK_DESC = {
   BW_GCF1: 'Green Cell Foam set 1 (Top/Long Side/Bottom)',
   BW_GCF2: 'Green Cell Foam set 2 (Side/Long Side/Side)',
   BW_GELPK: 'Gel pack',
-  BW_Infosheet: 'Info sheet insert',
+  BW_INFOSHEET: 'Info sheet insert',
 };
 
 /** MMDDYY — the header date (e.g. 081326). */

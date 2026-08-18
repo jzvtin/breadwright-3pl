@@ -194,11 +194,11 @@
     <table>
      <tr><th>Shopify product</th><th>WMS code</th></tr>
      <tr><td>Country Sourdough</td><td><span class="tag">BW_CSD</span></td></tr>
-     <tr><td>Seeded Sourdough (half)</td><td><span class="tag">BW_SeedSD</span></td></tr>
-     <tr><td>Cranberry Pecan</td><td><span class="tag">BW_CranPec</span></td></tr>
+     <tr><td>Seeded Sourdough (half)</td><td><span class="tag">BW_SEEDSD</span></td></tr>
+     <tr><td>Cranberry Pecan</td><td><span class="tag">BW_CRANPEC</span></td></tr>
      <tr><td>Multigrain Pullman</td><td><span class="tag">BW_MGP</span></td></tr>
      <tr><td>Demi Baguette (2-pack)</td><td><span class="tag">BW_DB2PK</span></td></tr>
-     <tr><td>Pane Francese</td><td><span class="tag">BW_PFran</span></td></tr>
+     <tr><td>Pane Francese</td><td><span class="tag">BW_PFRAN</span></td></tr>
      <tr><td>Founder's Box</td><td><span class="tag">BW-BOX-01</span></td></tr>
     </table>
    </div>
@@ -254,7 +254,7 @@ function pickListHTML(m,p){
    pickRow(true,p.kraftPaper||6,'Kraft paper layers','BW_BFP'),
    pickRow(true,null,'Dry ice — '+esc(dryLine),'BW_DRYICE'),
    (p.welcomeBooklet?pickRow(true,1,'Welcome booklet (new customer)','BW_WB'):''),
-   (p.insert!==false?pickRow(true,1,'Info insert (every order)','BW_Infosheet'):'')
+   (p.insert!==false?pickRow(true,1,'Info insert (every order)','BW_INFOSHEET'):'')
  ].join('');
  const today=new Date().toLocaleDateString();
  return ''+

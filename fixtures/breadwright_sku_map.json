@@ -1,0 +1,181 @@
+{
+  "_meta": {
+    "name": "Breadwright bridge SKU map",
+    "generated": "2026-08-18",
+    "canonical_casing": "UPPER_SNAKE \u2014 normalize Shopify, bridge and Datex to this before deploying",
+    "note": "Box SKUs are internal. No box code is ever emitted to Datex; every box explodes into bread material codes.",
+    "kraft_rule": "BW_BFP qty = bread_units on the order. Add-on lines do not count.",
+    "rules_live_in": "Shopify product metafield breadwright.explode_rule (type json, pinned). Written 2026-08-18. The bridge should read the rule off the product rather than hardcoding this file \u2014 a new box then needs no code change.",
+    "metafield_definition_id": "gid://shopify/MetafieldDefinition/177980506211",
+    "warehouse_code_metafield": "breadwright.warehouse_code (json, pinned) on every non-box sellable product. datex_code null = the code does not exist yet; the bridge should reject the order rather than ship short."
+  },
+  "bread": {
+    "BW_CSD": {
+      "name": "Country Sourdough",
+      "weight_oz": 16
+    },
+    "BW_SEEDSD": {
+      "name": "Seeded Sourdough Half Loaf",
+      "weight_oz": null,
+      "todo": "confirm half-loaf weight with Pain d'Avignon"
+    },
+    "BW_CRANPEC": {
+      "name": "Cranberry Pecan",
+      "weight_oz": 16
+    },
+    "BW_MGP": {
+      "name": "Multigrain Pullman",
+      "weight_oz": 24
+    },
+    "BW_DB2PK": {
+      "name": "Demi Baguette 2-Pack",
+      "weight_oz": 20
+    },
+    "BW_PFRAN": {
+      "name": "Pane Francese",
+      "weight_oz": 16
+    }
+  },
+  "box_explode": {
+    "BW-BOX-01": {
+      "name": "Founder's Box",
+      "source": "fixed",
+      "lines": {
+        "BW_CSD": 1,
+        "BW_PFRAN": 1,
+        "BW_MGP": 1,
+        "BW_CRANPEC": 1,
+        "BW_DB2PK": 1,
+        "BW_SEEDSD": 2
+      },
+      "bread_units": 7
+    },
+    "BW_CLASSICS": {
+      "name": "The Classics Box",
+      "source": "fixed",
+      "lines": {
+        "BW_CSD": 2,
+        "BW_DB2PK": 1,
+        "BW_PFRAN": 1,
+        "BW_MGP": 1,
+        "BW_SEEDSD": 1
+      },
+      "bread_units": 6
+    },
+    "BW_SDLOVER": {
+      "name": "Sourdough Lover's",
+      "source": "fixed",
+      "lines": {
+        "BW_CSD": 2,
+        "BW_SEEDSD": 2,
+        "BW_CRANPEC": 1,
+        "BW_PFRAN": 1
+      },
+      "bread_units": 6
+    },
+    "BW_SANDWICH": {
+      "name": "The Sandwich Box",
+      "source": "fixed",
+      "lines": {
+        "BW_MGP": 2,
+        "BW_CSD": 1,
+        "BW_SEEDSD": 1,
+        "BW_PFRAN": 1,
+        "BW_DB2PK": 1
+      },
+      "bread_units": 6
+    },
+    "BW_INFLBOX": {
+      "name": "Influencer Box",
+      "source": "fixed",
+      "lines": {
+        "BW_CSD": 1,
+        "BW_SEEDSD": 1,
+        "BW_CRANPEC": 1,
+        "BW_MGP": 1,
+        "BW_PFRAN": 1,
+        "BW_DB2PK": 1
+      },
+      "bread_units": 6
+    },
+    "BW_ENTERTAINER": {
+      "name": "The Entertainer Box",
+      "source": "fixed",
+      "lines": {
+        "BW_PFRAN": 1,
+        "BW_DB2PK": 1,
+        "BW_CSD": 1,
+        "BW_SEEDSD": 1,
+        "BW_CRANPEC": 1,
+        "BW_MGP": 1
+      },
+      "blocked": "Contains BW_PGBUTTER, which has no Datex code and no stock at Ice Cube. Do not enable until the butter is received.",
+      "addon_lines": {
+        "BW_PGBUTTER": 1
+      },
+      "bread_units": 6
+    },
+    "BW_BAB6": {
+      "name": "Build A Box \u2014 6",
+      "source": "line_item_properties",
+      "lines": null,
+      "bread_units": 6
+    },
+    "BW_BAB8": {
+      "name": "Build A Box \u2014 8",
+      "source": "line_item_properties",
+      "lines": null,
+      "bread_units": 8
+    }
+  },
+  "addons": {
+    "BW-EVOO": {
+      "name": "Extra Virgin Olive Oil",
+      "datex_code": null,
+      "storage": "dry",
+      "status": "unlisted on Shopify; no Datex code; no stock at Ice Cube",
+      "proposed_datex_code": "BW_EVOO"
+    },
+    "BW_PGBUTTER": {
+      "name": "Ploughgate Butter 8 oz",
+      "datex_code": null,
+      "storage": "frozen",
+      "status": "unlisted on Shopify; no Datex code; no stock at Ice Cube",
+      "proposed_datex_code": "BW_PGBUTTER"
+    }
+  },
+  "inject_every_order": {
+    "BW_BOX14": {
+      "qty": 1
+    },
+    "BW_GCF1": {
+      "qty": 1
+    },
+    "BW_GCF2": {
+      "qty": 1
+    },
+    "BW_GELPK": {
+      "qty": 2,
+      "weight_oz_each": 24
+    },
+    "BW_INFOSHEET": {
+      "qty": 1
+    }
+  },
+  "inject_computed": {
+    "BW_BFP": {
+      "rule": "one sheet per bread unit on the order"
+    },
+    "BW_WB": {
+      "rule": "qty 1 when order header first_order = true",
+      "status": "flag wired, upstream signal not connected"
+    }
+  },
+  "pack_sheet_only": {
+    "BW_DRYICE": {
+      "block_lb": 5,
+      "rule": "count from shipping zone + live destination weather + calendar-aware transit, capped by UN1845",
+      "never_send_to_datex": true
+    }
+  }
+}

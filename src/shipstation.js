@@ -42,7 +42,7 @@ const PACK_MATERIAL = {
   BW_GCF1: { desc: 'Green Cell Foam set 1 (Top/Long Side/Bottom)', oz: 8 },
   BW_GCF2: { desc: 'Green Cell Foam set 2 (Side/Long Side/Side)', oz: 8 },
   BW_GELPK: { desc: 'Gel pack', oz: 16 },
-  BW_Infosheet: { desc: 'Info sheet insert', oz: 1 },
+  BW_INFOSHEET: { desc: 'Info sheet insert', oz: 1 },
   BW_BFP: { desc: 'Brown freezer paper', oz: 1 },
 };
 
@@ -86,11 +86,20 @@ function loafItems(order) {
       weight: { value: unitOz(code), unit: 'ounce' },
     });
   };
+  const { resolveBuildABox } = cfg;
   for (const li of order.lineItems) {
+    const qty = Number(li.quantity) || 0;
+    if (qty <= 0) continue; // removed by order edit
     const r = resolveMaterial(li);
-    if (r.code) push(r.code, li.quantity);
-    else if (r.kit && r.kit.explode) for (const [code, qty] of r.kit.explode) push(code, qty * li.quantity);
-    else if (r.kit && r.kit.kit) { push(r.kit.kit, li.quantity); warnings.push(`Kit "${r.handle}" sent as single code ${r.kit.kit} (no explode rule).`); }
+    if (r.code) push(r.code, qty);
+    else if (r.box) {
+      if (r.box.blocked) warnings.push(`${r.box.name} blocked: ${r.box.blocked}`);
+      else if (r.box.propertyDriven) {
+        const bab = resolveBuildABox(r.box, li);
+        if (bab.blocked) warnings.push(bab.blocked);
+        else for (const [code, per] of Object.entries(bab.lines)) push(code, per * qty);
+      } else for (const [code, per] of Object.entries(r.box.lines)) push(code, per * qty);
+    } else if (r.blocked) warnings.push(`Line "${li.title || li.sku || ''}" blocked: ${r.blocked}`);
     else warnings.push(`No WMS code for "${r.unknown}" — add to materials.js.`);
   }
   return { items, warnings };
@@ -113,14 +122,15 @@ function buildTestShipment(order, opts = {}) {
   const loafUnits = loaves.reduce((s, it) => s + it.quantity, 0);
   // ORDER ITEMS (picked / inventoried): loaves + box + GCF1 + GCF2 + 2 gel packs.
   const items = includePackaging ? loaves.concat(packagingItems()) : loaves;
-  // "Everything else" — ShipStation-only ride-alongs (cfg.SHIPSTATION_EXTRAS):
-  // info sheet, freezer paper (1/loaf), first-order welcome note. NOT picked
-  // from Datex inventory — surfaced in the shipment NOTES, not the pick list.
+  // Inserts that are now DATEX picks too (canonical 2026-08-18): info sheet x1,
+  // kraft/freezer paper x(bread units), first-order welcome note. Surfaced in the
+  // shipment NOTES for the packer as a cross-check against the Datex pick list.
   const extras = includePackaging
-    ? cfg.SHIPSTATION_EXTRAS.map((e) => {
-        const qty = e.perLoaf ? loafUnits : e.qty;
-        return `${e.label} x${qty}${e.firstOrder ? ' (first order only)' : ''}`;
-      })
+    ? [
+        'info sheet x1',
+        `kraft paper x${loafUnits}`,
+        ...(order.isFirstOrder ? ['welcome note x1 (first order)'] : []),
+      ]
     : [];
   const totalOz = items.reduce((s, it) => s + it.weight.value * it.quantity, 0);
   const num = opts.test ? `TEST-${order.number}` : String(order.number);

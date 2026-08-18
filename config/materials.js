@@ -3,31 +3,38 @@
  * ---------------------------------------------------------------------------
  * THE CRUX OF THE WHOLE INTEGRATION.
  *
- * Every value in this file that says `CONFIRM` must be verified with the 3PL
- * (Bill Turgeon / RSI / Datex) before going live. Nothing else in the codebase
- * needs to change when Bill answers — just edit this one file.
+ * Canonical source of truth (2026-08-18): fixtures/breadwright_sku_map.json plus
+ * the reference order fixtures/BW_1003_datex_order.xml. Where older ad-hoc notes
+ * disagreed with these (the 08-13 "freezer paper removed / infosheet
+ * ShipStation-only" decisions), the 08-18 canonical wins (owner decision).
  *
- * Source of truth so far: "New Sample Inbound Shipment.xml" (real BW_* codes)
- * and "Sample Customer Order Shipment.xml" (packaging codes). Note the two
- * samples DISAGREE on packaging codes — see PACKAGING below.
+ * Rules the map mandates:
+ *   - All material codes are canonical UPPER_SNAKE. Datex still holds three in
+ *     mixed case (BW_SeedSD, BW_CranPec, BW_PFran) — normalize before importing.
+ *   - Box SKUs are internal. No box code is ever emitted to Datex; every box
+ *     explodes into bread material codes.
+ *   - BW_BFP qty = bread units on the order (add-on lines do not count).
+ *   - Add-ons whose datex_code is null (BW-EVOO, BW_PGBUTTER) have NO Datex code
+ *     and NO stock at Ice Cube — the bridge REJECTS the order rather than ship
+ *     short. The Entertainer box is blocked for the same reason (it carries the
+ *     butter).
  * ---------------------------------------------------------------------------
  */
 
-// Constants that appear on every file (confirmed from all three samples).
+// Constants that appear on every file.
 const CONSTANTS = {
   projectLookupCode: 'BREADWRIGHT',
   warehouseLookupCode: 'Ice Cube Cold Storage',
   namespace: 'http://www.datexcorp.com/OrderSchema.xsd',
   // TransactionInfo/UserCode differed by direction in the samples.
-  // CONFIRM with Bill which user code WE should stamp on files we generate.
-  userCodeOutbound: 'ALLEY', // customer order sample used this
-  userCodeInbound: 'JP+', //    inbound sample used this
-  orderClassOutbound: 'BW', //  customer order
-  orderClassInbound: 'PO', //   inbound stock / ASN
-  // Default carrier stamped on outbound shipments. Breadwright ships UPS.
+  userCodeOutbound: 'ALLEY', //  customer order sample (BW_1003) used this
+  userCodeInbound: 'JP+', //     inbound sample used this
+  orderClassOutbound: 'BW', //   customer order
+  orderClassInbound: 'PO', //    inbound stock / ASN
   defaultCarrier: 'UPS Air',
-  // OwnerReference = a fixed 6-char to/from-Ice-Cube tag (Bill: NOT the order number,
-  // "whatever you want"). Order number rides in LookupCode. Bill's sample used ICCS.
+  // OwnerReference = a fixed 6-char to/from-Ice-Cube tag (Bill: NOT the order
+  // number). Order number rides in LookupCode. KEEP as BWICCS for now — the
+  // 08-18 sample used the numeric Shopify order id instead; flagged, may revisit.
   ownerReference: 'BWICCS',
 };
 
@@ -45,127 +52,189 @@ const BREADWRIGHT_ACCOUNT = {
 };
 
 /**
- * Shopify product  ->  WMS MaterialLookupCode.
- * Keyed by Shopify product HANDLE. We also try to match on SKU (see resolver).
- * `null` = we do not yet know the Shopify handle for that WMS code — CONFIRM.
+ * The six sellable bread materials. Canonical UPPER_SNAKE codes.
+ * weightOz is informational (drives no XML field yet); null = not confirmed.
  */
-const LOAVES = {
-  'country-sourdough': 'BW_CSD', //     confirmed
-  'seeded-sourdough': 'BW_SeedSD', //   confirmed (Seeded Sourdough Half Loaf)
-  'cranberry-pecan': 'BW_CranPec', //   confirmed
-  'multigrain-pullman': 'BW_MGP', //    confirmed
-  'french-baguette': 'BW_DB2PK', //     Demi Baguette 2-Pack, confirmed
-  'pane-francese': 'BW_PFran', //       confirmed
-  // RESOLVED 2026-08-03 (Muhammad "Breadwright SKU & Weight" email): the two
-  // remaining codes BW_BFP and BW_WB are NOT sellable products — BW_BFP = Brown
-  // Freezer Paper and BW_WB = First-order Welcome Booklet. Both are packaging /
-  // inserts, moved to PACKAGING / FIRST_ORDER_INSERTS below.
-  // TODO: verify these six Shopify HANDLES match the live storefront exactly.
+const BREAD = {
+  BW_CSD: { name: 'Country Sourdough', weightOz: 16 },
+  BW_SEEDSD: { name: 'Seeded Sourdough Half Loaf', weightOz: null },
+  BW_CRANPEC: { name: 'Cranberry Pecan', weightOz: 16 },
+  BW_MGP: { name: 'Multigrain Pullman', weightOz: 24 },
+  BW_DB2PK: { name: 'Demi Baguette 2-Pack', weightOz: 20 },
+  BW_PFRAN: { name: 'Pane Francese', weightOz: 16 },
 };
 
 /**
- * Case pack + unit weights, from Muhammad's "Breadwright SKU & Weight" email
- * (2026-08-03). Drives inbound ASN quantities and any weight field. `unitsPerCase`
- * is how many sellable units are in one case (used to convert cases <-> eaches).
+ * Shopify product HANDLE -> WMS MaterialLookupCode (for standalone loaf line
+ * items sold outside a box). The resolver also tries SKU and title.
+ */
+const LOAVES = {
+  'country-sourdough': 'BW_CSD',
+  'seeded-sourdough': 'BW_SEEDSD',
+  'cranberry-pecan': 'BW_CRANPEC',
+  'multigrain-pullman': 'BW_MGP',
+  'french-baguette': 'BW_DB2PK', //  Demi Baguette 2-Pack
+  'demi-baguette': 'BW_DB2PK', //    alt handle
+  'pane-francese': 'BW_PFRAN',
+};
+
+/**
+ * Loaf NAME (lowercased) -> code. Used to resolve Build-a-Box line-item
+ * property values (the customer's chosen loaves arrive as human names) and to
+ * match a line item by title when handle/sku are missing.
+ */
+const LOAF_BY_NAME = {
+  'country sourdough': 'BW_CSD',
+  'seeded sourdough': 'BW_SEEDSD',
+  'seeded sourdough half loaf': 'BW_SEEDSD',
+  'cranberry pecan': 'BW_CRANPEC',
+  'multigrain pullman': 'BW_MGP',
+  'demi baguette': 'BW_DB2PK',
+  'demi baguette 2-pack': 'BW_DB2PK',
+  'demi baguette — 2 pack': 'BW_DB2PK',
+  'demi baguette - 2 pack': 'BW_DB2PK',
+  'pane francese': 'BW_PFRAN',
+};
+
+/** Look up a loaf code from an arbitrary human name (case/space tolerant). */
+function loafCodeFromName(name) {
+  const k = String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (LOAF_BY_NAME[k]) return LOAF_BY_NAME[k];
+  // tolerate trailing size/weight noise: match on the longest known name prefix
+  for (const [n, code] of Object.entries(LOAF_BY_NAME)) if (k.startsWith(n)) return code;
+  return null;
+}
+
+/**
+ * Box explode recipes (from the map's box_explode). Keyed by Shopify SKU; the
+ * resolver also matches known handles. Each box explodes into bread codes — the
+ * box code itself is NEVER emitted to Datex.
+ *   - lines:        fixed recipe { code: qty } (source 'fixed')
+ *   - propertyDriven: loaves come from line-item properties (Build-a-Box)
+ *   - blocked:      a reason string => order is held, never shipped short
+ *   - breadUnits:   expected loaf count (drives BW_BFP + Build-a-Box validation)
+ */
+const BOX_EXPLODE = {
+  'BW-BOX-01': {
+    name: "Founder's Box",
+    lines: { BW_CSD: 1, BW_PFRAN: 1, BW_MGP: 1, BW_CRANPEC: 1, BW_DB2PK: 1, BW_SEEDSD: 2 },
+    breadUnits: 7,
+  },
+  BW_CLASSICS: {
+    name: 'The Classics Box',
+    lines: { BW_CSD: 2, BW_DB2PK: 1, BW_PFRAN: 1, BW_MGP: 1, BW_SEEDSD: 1 },
+    breadUnits: 6,
+  },
+  BW_SDLOVER: {
+    name: "Sourdough Lover's",
+    lines: { BW_CSD: 2, BW_SEEDSD: 2, BW_CRANPEC: 1, BW_PFRAN: 1 },
+    breadUnits: 6,
+  },
+  BW_SANDWICH: {
+    name: 'The Sandwich Box',
+    lines: { BW_MGP: 2, BW_CSD: 1, BW_SEEDSD: 1, BW_PFRAN: 1, BW_DB2PK: 1 },
+    breadUnits: 6,
+  },
+  BW_INFLBOX: {
+    name: 'Influencer Box',
+    lines: { BW_CSD: 1, BW_SEEDSD: 1, BW_CRANPEC: 1, BW_MGP: 1, BW_PFRAN: 1, BW_DB2PK: 1 },
+    breadUnits: 6,
+  },
+  BW_ENTERTAINER: {
+    name: 'The Entertainer Box',
+    lines: { BW_PFRAN: 1, BW_DB2PK: 1, BW_CSD: 1, BW_SEEDSD: 1, BW_CRANPEC: 1, BW_MGP: 1 },
+    breadUnits: 6,
+    blocked:
+      'Contains BW_PGBUTTER, which has no Datex code and no stock at Ice Cube. Do not enable until the butter is coded + received.',
+  },
+  BW_BAB6: { name: 'Build A Box — 6', propertyDriven: true, breadUnits: 6 },
+  BW_BAB8: { name: 'Build A Box — 8', propertyDriven: true, breadUnits: 8 },
+};
+
+// Known Shopify HANDLES that map to a box SKU (resolver convenience).
+const BOX_HANDLES = {
+  'the-breadwright-founders-box': 'BW-BOX-01',
+  'founders-box': 'BW-BOX-01',
+  'the-classics-box': 'BW_CLASSICS',
+  'sourdough-lovers': 'BW_SDLOVER',
+  'the-sandwich-box': 'BW_SANDWICH',
+  'influencer-box': 'BW_INFLBOX',
+  'the-entertainer-box': 'BW_ENTERTAINER',
+  'build-a-box': 'BW_BAB6', // size disambiguated by qty/variant at resolve time
+};
+
+/**
+ * Add-ons that exist on Shopify but have NO Datex code and NO stock at Ice Cube.
+ * Any order line resolving to one of these is a BLOCKING condition (reject, do
+ * not ship short). Keyed by SKU; title match is a fallback.
+ */
+const ADDON_NO_CODE = {
+  'BW-EVOO': 'Extra Virgin Olive Oil (no Datex code, no stock at Ice Cube)',
+  'BW-ADDON-01': 'Extra Virgin Olive Oil (no Datex code, no stock at Ice Cube)',
+  BW_PGBUTTER: 'Ploughgate Butter 8 oz (no Datex code, no stock at Ice Cube)',
+  'BW-ADDON-02': 'Cultured Butter (no Datex code, no stock at Ice Cube)',
+};
+const ADDON_TITLE_RE = /(olive oil|cultured butter|ploughgate|caviar butter)/i;
+
+/**
+ * PACKAGING AUTO-INJECTED on every outbound order (not Shopify line items).
+ * These four are Datex inventory picks, in the order the BW_1003 sample emits
+ * them: box -> GCF1 -> GCF2 -> gel packs. Kept as PACKAGING because packslip.js
+ * and shipstation.js consume this exact list.
+ */
+const PACKAGING = [
+  { code: 'BW_BOX14', qty: 1 }, //  Cardboard shipping box 14x14x14
+  { code: 'BW_GCF1', qty: 1 }, //   Green Cell Foam set 1 (Top/Long Side/Bottom)
+  { code: 'BW_GCF2', qty: 1 }, //   Green Cell Foam set 2 (Side/Long Side/Side)
+  { code: 'BW_GELPK', qty: 2 }, //  Gel packs — 2 per box, every order
+];
+
+/**
+ * Inserts emitted to Datex on every order, AFTER the computed BW_BFP line
+ * (matches BW_1003 line order: ...BFP, BW_INFOSHEET, [BW_WB]).
+ */
+const INSERT_EVERY_ORDER = [
+  { code: 'BW_INFOSHEET', qty: 1 }, //  info sheet, every order
+];
+
+/**
+ * Computed lines:
+ *   - BW_BFP: one kraft sheet per bread unit on the order.
+ *   - BW_WB:  one welcome note, first order only (order.isFirstOrder).
+ * BW_WB is appended last, after the inserts (BW_1003 line 13).
+ */
+const COMPUTED = {
+  kraftPaperCode: 'BW_BFP', //          qty = bread units
+  welcomeNoteCode: 'BW_WB', //          qty 1 iff first order
+};
+
+// Dry ice is computed for the pack sheet ONLY and NEVER emitted to Datex.
+const DRYICE_CODE = 'BW_DRYICE';
+
+/**
+ * Case pack + unit weights (informational; drives inbound ASN quantities and
+ * pack-list descriptions). Canonical UPPER_SNAKE keys.
  */
 const CASE_PACK = {
   BW_CSD: { desc: 'Country Sourdough', caseWeightLb: 12, unitWeightLb: 1, unitsPerCase: 12 },
   BW_MGP: { desc: 'Multigrain Pullman', caseWeightLb: 30, unitWeightLb: 1.5, unitsPerCase: 20 },
-  BW_CranPec: { desc: 'Cranberry Pecan', caseWeightLb: 18, unitWeightLb: 1, unitsPerCase: 18 },
-  BW_PFran: { desc: 'Pane Francese', caseWeightLb: 10, unitWeightLb: 1, unitsPerCase: 10 },
+  BW_CRANPEC: { desc: 'Cranberry Pecan', caseWeightLb: 18, unitWeightLb: 1, unitsPerCase: 18 },
+  BW_PFRAN: { desc: 'Pane Francese', caseWeightLb: 10, unitWeightLb: 1, unitsPerCase: 10 },
   BW_DB2PK: { desc: 'Demi Baguette (2-Pack)', caseWeightLb: 12.5, unitWeightOz: 10, unitsPerCase: 20 },
-  BW_SeedSD: { desc: 'Seeded Sourdough Half Loaf', caseWeightLb: 16.5, unitsPerCase: 12 },
+  BW_SEEDSD: { desc: 'Seeded Sourdough Half Loaf', caseWeightLb: 16.5, unitsPerCase: 12 },
+  // Packaging / insert descriptions for the pack list.
+  BW_BOX14: { desc: 'Cardboard shipping box 14" cube' },
+  BW_GCF1: { desc: 'Green Cell Foam set 1' },
+  BW_GCF2: { desc: 'Green Cell Foam set 2' },
+  BW_GELPK: { desc: 'Gel pack' },
+  BW_BFP: { desc: 'Kraft / freezer paper sheet' },
+  BW_INFOSHEET: { desc: 'Info sheet' },
+  BW_WB: { desc: 'Welcome note' },
 };
-
-/**
- * "Kit" products (Founder's Box, Build-a-Box, bundles).
- * CONFIRM with Bill: does a box product ship as a single kit code, OR does it
- * explode into its component loaves? Fill this in once decided.
- *   - Ship as kit:  'founders-box': { kit: 'BW_FOUNDERS' }
- *   - Explode:      'founders-box': { explode: [['BW_CSD',1],['BW_MGP',1], ...] }
- */
-// The Breadwright Founder's Box recipe — CONFIRMED 2026-08-04 (Bill/Justin).
-// The box EXPLODES into these component loaves on the order (not one kit code),
-// so the warehouse picks the exact loaves. 6 loaf units total (Seeded SD x2).
-const FOUNDERS_BOX = [
-  ['BW_CSD', 1], //     Country Sourdough
-  ['BW_PFran', 1], //   Pane Francese
-  ['BW_MGP', 1], //     Multigrain Pullman
-  ['BW_CranPec', 1], // Cranberry Pecan (1#)
-  ['BW_DB2PK', 1], //   Demi Baguette 2-Pack
-  ['BW_SeedSD', 2], //  Seeded Sourdough Half Loaf x2
-];
-
-const KITS = {
-  // Keyed by Shopify HANDLE or SKU (resolver checks both).
-  'BW-BOX-01': { explode: FOUNDERS_BOX },
-  'the-breadwright-founders-box': { explode: FOUNDERS_BOX },
-};
-
-/**
- * PACKAGING AUTO-INJECTION — items added to every OUTBOUND customer order
- * that are NOT Shopify line items (box, insulation, ice, inserts).
- *
- * CODES RESOLVED 2026-08-03 from Muhammad's "Breadwright SKU & Weight" email —
- * the definitive codes are the BW_* set (the earlier ICE5_AC/BOX1_RC/GCF1/GCF2
- * sample codes were placeholders). Note the correction: GCF1/GCF2 are the two
- * INSULATION panel sides of the cooler box, NOT gift-card flyers.
- *
- * QUANTITIES are still CONFIRM — Bill/Muhammad have not given the per-box counts:
- *   - BW_DRYICE: driven by transit time -> shipping ZONE (see config/zone-zips.csv);
- *     the warehouse SOP adds dry ice "according to the shipping label requirements."
- *     Default 1x 5lb block until the zone->lbs table is confirmed.
- *   - BW_GELPK: qty per box unknown (may be used instead of / alongside dry ice).
- *   - BW_GCF1 / BW_GCF2: panels per box unknown (likely 1 each = one cooler).
- *   - BW_BFP: freezer paper sheets — likely 1 per loaf; CONFIRM.
- *   - BW_Infosheet: does it ship in EVERY order? (was NOT in the outbound sample).
- */
-// CONFIRMED 2026-08-04 (Bill/Justin). Insulation = Green Cell Foam (GCF), 1"
-// thick, inside a normal cardboard box. Kraft/freezer paper (BW_BFP) and dry ice
-// (BW_DRYICE) are NOT here — they're injected dynamically in buildOrder.js:
-// paper scales per loaf (the layers, ~4-6), dry ice is computed from the
-// destination zone + heat (see config/dryice.js).
-const PACKAGING = [
-  { code: 'BW_BOX14', qty: 1 }, //     Cardboard shipping box 14x14x14
-  // Green Cell Foam — currently TWO grouped SKUs (each = 3 panels). Bill 08-11
-  // wants a SEPARATE SKU per panel (top / long side / bottom / side). Those
-  // per-panel codes don't exist in Datex yet — when Bill creates them, replace
-  // these two lines with one per panel + qty, e.g.:
-  //   { code: 'BW_GCF_TOP', qty: 1 }, { code: 'BW_GCF_BOT', qty: 1 },
-  //   { code: 'BW_GCF_LS',  qty: 2 }, { code: 'BW_GCF_SIDE', qty: 2 },
-  { code: 'BW_GCF1', qty: 1 }, //      Green Cell Foam set 1 — Top/Long Side/Bottom (Datex-confirmed 08-11)
-  { code: 'BW_GCF2', qty: 1 }, //      Green Cell Foam set 2 — Side/Long Side/Side (Datex-confirmed 08-11)
-  { code: 'BW_GELPK', qty: 2 }, //     Gel packs — 2 per box, standard every order
-  // NOTE (Justin 2026-08-13): the Datex XML inventory-picks ONLY box + GCF1 +
-  // GCF2 + gel + the loaves. EVERYTHING ELSE is ShipStation-only (info sheet,
-  // freezer paper, first-order welcome note) — see SHIPSTATION_EXTRAS below.
-];
-
-/**
- * SHIPSTATION-ONLY ride-alongs. NOT picked from Datex inventory, so NOT emitted
- * as Datex order lines — they appear only on the ShipStation packing list.
- * `perLoaf: true` => quantity scales to the number of loaf units in the order.
- */
-const SHIPSTATION_EXTRAS = [
-  { code: 'BW_Infosheet', label: 'info sheet', qty: 1 }, //          every order
-  // Freezer paper (BW_BFP) HELD OUT entirely 2026-08-13 (Justin) until dry ice
-  // is figured out — not in the XML, not on the ShipStation list. Re-add here.
-  { code: 'BW_WB', label: 'welcome note', qty: 1, firstOrder: true }, // first order only
-];
-
-/**
- * FIRST-ORDER-ONLY inserts. BW_WB (Welcome Booklet) ships only on a customer's
- * very first order per Muhammad's SKU email. NOT YET WIRED into buildOrder.js —
- * needs a "first order for this customer" signal (e.g. Shopify customer
- * orders_count === 1, or an internal ledger). Left here so it isn't lost.
- */
-const FIRST_ORDER_INSERTS = [
-  { code: 'BW_WB', qty: 1 }, //      First-order Welcome Booklet
-];
 
 /**
  * The 7 UserDefinedFields the customer-order sample carried. All false except
- * the verified flag. CONFIRM which are actually required vs optional.
+ * the verified flag.
  */
 const ORDER_UDFS = [
   { name: 'Order Completely entered and Verified?', value: 'true' },
@@ -177,41 +246,79 @@ const ORDER_UDFS = [
   { name: 'SealRequired', value: 'false' },
 ];
 
-const INBOUND_UDFS = [
-  { name: 'Order Completely entered and Verified?', value: 'True' },
-];
+const INBOUND_UDFS = [{ name: 'Order Completely entered and Verified?', value: 'True' }];
 
 /**
- * Resolve a Shopify line item to a WMS material code.
- * Tries handle first, then SKU (if you set SKUs = codes in Shopify).
- * Returns { code } or { unknown: <identifier> } so callers can flag gaps.
+ * Resolve a Shopify line item to a WMS result. Returns exactly one of:
+ *   { code }                 -> a standalone loaf material line
+ *   { box }                  -> a box entry from BOX_EXPLODE (caller explodes it)
+ *   { blocked: reason }      -> a hard block (null-Datex-code add-on)
+ *   { unknown: id }          -> unrecognized item (blocking; add to the map)
  */
 function resolveMaterial(lineItem) {
-  const handle = (lineItem.handle || '').toLowerCase();
+  const handle = (lineItem.handle || '').toLowerCase().trim();
   const sku = (lineItem.sku || '').trim();
+  const skuU = sku.toUpperCase();
+  const title = (lineItem.title || '').trim();
+
+  // 1) Boxes (by SKU, then handle). Never emit the box code itself.
+  if (BOX_EXPLODE[sku]) return { box: { key: sku, ...BOX_EXPLODE[sku] } };
+  if (BOX_EXPLODE[skuU]) return { box: { key: skuU, ...BOX_EXPLODE[skuU] } };
+  if (handle && BOX_HANDLES[handle]) {
+    const key = BOX_HANDLES[handle];
+    return { box: { key, ...BOX_EXPLODE[key] } };
+  }
+
+  // 2) Null-Datex-code add-ons -> hard block.
+  if (ADDON_NO_CODE[sku] || ADDON_NO_CODE[skuU]) return { blocked: ADDON_NO_CODE[sku] || ADDON_NO_CODE[skuU] };
+  if (title && ADDON_TITLE_RE.test(title)) return { blocked: `${title} — no Datex code / no stock at Ice Cube` };
+
+  // 3) Standalone loaves (handle -> sku-as-code -> title).
   if (handle && LOAVES[handle]) return { code: LOAVES[handle] };
-  if (sku && Object.values(LOAVES).includes(sku)) return { code: sku };
-  // Kits match by handle OR sku (Shopify sends SKU like BW-BOX-01).
-  const kit = (handle && KITS[handle]) || (sku && KITS[sku]);
-  if (kit) return { kit, handle: handle || sku };
-  return { unknown: handle || sku || lineItem.title || '(no id)' };
+  if (skuU && BREAD[skuU]) return { code: skuU };
+  const byName = loafCodeFromName(title);
+  if (byName) return { code: byName };
+
+  return { unknown: handle || sku || title || '(no id)' };
 }
 
 /**
- * Shipping SERVICE LEVEL for <VendorReference> (Bill wants "1 Day" / "2 Day" etc.,
- * NOT tracking). Derived from the shipping method the customer picked at checkout
- * (Shopify shipping_lines). Matching is case-insensitive substring on title+code.
- * CONFIRM exact strings Datex expects and add any real shipping-method names below.
+ * Parse Build-a-Box chosen loaves from a line item's `properties` array.
+ * Properties are Shopify name/value pairs; we collect every value (and, if a
+ * value is a comma/newline list, every element) that maps to a known loaf.
+ * @returns {{ lines: object } | { blocked: string }}
  */
-// Bill (Ice Cube, 2026-08-13) — VendorReference = shipping time, ONLY TWO valid
-// values: 1_DAY / 2_DAY. No 3_DAY, no AIR, no "ground". Anything else -> DEFAULT.
+function resolveBuildABox(box, lineItem) {
+  const props = Array.isArray(lineItem.properties) ? lineItem.properties : [];
+  const chosen = [];
+  for (const p of props) {
+    if (!p || p.name == null) continue;
+    if (String(p.name).startsWith('_')) continue; // hidden/app props
+    for (const piece of String(p.value == null ? '' : p.value).split(/[,;\n]/)) {
+      const code = loafCodeFromName(piece);
+      if (code) chosen.push(code);
+    }
+  }
+  if (chosen.length !== box.breadUnits) {
+    return {
+      blocked: `Build-a-Box (${box.name}) expected ${box.breadUnits} loaves but parsed ${chosen.length} from line-item properties — resolve in Shopify before sending.`,
+    };
+  }
+  const lines = {};
+  for (const code of chosen) lines[code] = (lines[code] || 0) + 1;
+  return { lines };
+}
+
+/**
+ * Shipping SERVICE LEVEL for <VendorReference>. Bill (Ice Cube, 2026-08-13):
+ * only two valid values, 1_DAY / 2_DAY. Anything else -> DEFAULT.
+ */
 const SERVICE_LEVELS = [
   { match: ['next day', 'overnight', '1 day', 'nextday', 'next_day', '1_day'], value: '1_DAY' },
   { match: ['2 day', '2day', 'second day', 'two day', '2_day'], value: '2_DAY' },
 ];
-const DEFAULT_SERVICE_LEVEL = '2_DAY'; // fallback when no method matches
+const DEFAULT_SERVICE_LEVEL = '2_DAY';
 
-/** Map a Shopify order's shipping_lines to Bill's service-level string. */
 function resolveServiceLevel(shippingLines) {
   const first = Array.isArray(shippingLines) ? shippingLines[0] : null;
   const hay = `${(first && first.title) || ''} ${(first && first.code) || ''}`.toLowerCase();
@@ -222,16 +329,23 @@ function resolveServiceLevel(shippingLines) {
 module.exports = {
   CONSTANTS,
   BREADWRIGHT_ACCOUNT,
+  BREAD,
+  LOAVES,
+  LOAF_BY_NAME,
+  loafCodeFromName,
+  BOX_EXPLODE,
+  BOX_HANDLES,
+  ADDON_NO_CODE,
+  PACKAGING,
+  INSERT_EVERY_ORDER,
+  COMPUTED,
+  DRYICE_CODE,
+  CASE_PACK,
+  ORDER_UDFS,
+  INBOUND_UDFS,
   SERVICE_LEVELS,
   DEFAULT_SERVICE_LEVEL,
   resolveServiceLevel,
-  LOAVES,
-  CASE_PACK,
-  KITS,
-  PACKAGING,
-  SHIPSTATION_EXTRAS,
-  FIRST_ORDER_INSERTS,
-  ORDER_UDFS,
-  INBOUND_UDFS,
   resolveMaterial,
+  resolveBuildABox,
 };

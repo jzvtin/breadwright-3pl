@@ -32,85 +32,85 @@ function orderLine(lineNumber, shipmentCode, materialCode, amount) {
  * @returns {{ node: object, warnings: string[], pack: object }}
  */
 function buildOrderNode(order, opts = {}) {
-  const { CONSTANTS: C, resolveMaterial, PACKAGING, FIRST_ORDER_INSERTS, ORDER_UDFS } = cfg;
-  const warnings = [];
+  const { CONSTANTS: C, resolveMaterial, resolveBuildABox, PACKAGING, INSERT_EVERY_ORDER, COMPUTED, ORDER_UDFS } = cfg;
+  const warnings = []; //  informational, send still allowed
+  const blocking = []; //  hard blocks — Confirm & Send must be disabled
   const shipCode = String(order.number);
-  // materialsOnly: loaves ONLY — no cooler box/insulation/gel, no kraft paper,
-  // no dry ice, no first-order insert. For Bill's Datex inventory test (2026-08-10).
+  // materialsOnly: bread ONLY — no cooler box/insulation/gel, no kraft paper,
+  // no inserts, no dry ice. For Bill's Datex inventory test (2026-08-10).
   const materialsOnly = !!opts.materialsOnly;
 
-  // 1) Real product lines from Shopify, mapped to WMS codes. Track loaf UNITS
-  //    (used to scale the kraft/freezer paper layers below).
-  const lines = [];
-  let n = 1;
-  let loafUnits = 0; //  total loaf pieces (for reference)
-  let loafLines = 0; //  distinct loaf picks — one kraft layer sheet per loaf type
+  // 1) Explode every Shopify line item into bread material lines (code -> qty).
+  //    Boxes explode into their component loaves; the box code itself is never
+  //    emitted. Lines with resolved qty <= 0 (e.g. add-ons removed by an order
+  //    edit -> current_quantity 0) are skipped. Track bread UNITS for BW_BFP.
+  const breadLines = []; // [{ code, qty }] in encounter order
+  let breadUnits = 0;
+  const addBread = (code, qty) => {
+    if (qty <= 0) return;
+    breadLines.push({ code, qty });
+    breadUnits += qty;
+  };
   for (const li of order.lineItems) {
+    const qty = Number(li.quantity) || 0;
+    if (qty <= 0) continue; // removed by order edit / zero line
     const r = resolveMaterial(li);
     if (r.code) {
-      lines.push(orderLine(n++, shipCode, r.code, li.quantity));
-      loafUnits += li.quantity;
-      loafLines += 1;
-    } else if (r.kit) {
-      if (r.kit.explode) {
-        for (const [code, qty] of r.kit.explode) {
-          lines.push(orderLine(n++, shipCode, code, qty * li.quantity));
-          loafUnits += qty * li.quantity;
-          loafLines += 1;
-        }
-      } else if (r.kit.kit) {
-        // Legacy path: ship as a single kit code and assume Datex explodes it.
-        lines.push(orderLine(n++, shipCode, r.kit.kit, li.quantity));
-        warnings.push(
-          `Kit "${r.handle}" sent as single code "${r.kit.kit}" (qty ${li.quantity}) — assumes Datex has a matching kit/BOM. CONFIRM code + that it explodes warehouse-side (else switch KITS to explode).`
-        );
+      addBread(r.code, qty);
+    } else if (r.box) {
+      if (r.box.blocked) {
+        blocking.push(`${r.box.name} (${r.box.key}) is blocked: ${r.box.blocked}`);
+      } else if (r.box.propertyDriven) {
+        const bab = resolveBuildABox(r.box, li);
+        if (bab.blocked) blocking.push(bab.blocked);
+        else for (const [code, per] of Object.entries(bab.lines)) addBread(code, per * qty);
       } else {
-        warnings.push(
-          `Kit product "${r.handle}" has no resolution rule yet (kit vs explode) — see config/materials.js KITS.`
-        );
+        for (const [code, per] of Object.entries(r.box.lines)) addBread(code, per * qty);
       }
+    } else if (r.blocked) {
+      blocking.push(`Line "${li.title || li.sku || ''}" is blocked: ${r.blocked}`);
     } else {
-      warnings.push(
-        `No WMS material code for Shopify item "${r.unknown}" — add it to config/materials.js LOAVES/KITS.`
+      blocking.push(
+        `No WMS material code for Shopify item "${r.unknown}" — add it to config/materials.js before sending.`
       );
     }
   }
 
-  // 2) Auto-injected packaging (box / insulation / gel packs / insert) — not Shopify line items.
-  //    Skipped entirely in materialsOnly mode.
+  // 2) Assemble the Datex order lines in the BW_1003 sequence:
+  //    bread -> box/GCF1/GCF2/gel -> BW_BFP(bread units) -> BW_INFOSHEET -> BW_WB(first order).
+  const lines = [];
+  let n = 1;
+  const emit = (code, qty) => lines.push(orderLine(n++, shipCode, code, qty));
+  for (const b of breadLines) emit(b.code, b.qty);
+
   const zip = order.shipping && order.shipping.postalCode;
   let dryIce = null;
   if (!materialsOnly) {
-    for (const p of PACKAGING) {
-      lines.push(orderLine(n++, shipCode, p.code, p.qty));
-    }
+    // 2a) Packaging picks (box / Green Cell Foam / gel packs).
+    for (const p of PACKAGING) emit(p.code, p.qty);
+    // 2b) Computed kraft/freezer paper — one sheet per bread unit on the order.
+    if (breadUnits > 0) emit(COMPUTED.kraftPaperCode, breadUnits);
+    // 2c) Inserts shipped on every order (info sheet).
+    for (const ins of INSERT_EVERY_ORDER) emit(ins.code, ins.qty);
+    // 2d) First-order welcome note (BW_WB) — only on the customer's first order.
+    if (order.isFirstOrder) emit(COMPUTED.welcomeNoteCode, 1);
 
-    // 2a) Freezer paper REMOVED 2026-08-13 (Bill: "no freezer paper"). BW_BFP is
-    //     no longer injected into the order XML.
-
-    // 2b) Dry ice — computed for the human pack sheet ONLY. Datex does NOT
-    //     inventory dry ice (not in their material list; Bill 08-11: "everything
-    //     but dry ice"), so it is NOT emitted as an order line. When the caller
-    //     has already resolved live conditions (weather + calendar-aware transit
-    //     via resolveDryIceConditions), it passes them on order.dryIceConditions;
-    //     otherwise we fall back to the sync zone/season estimate.
+    // 2e) Dry ice — computed for the human pack sheet ONLY. Datex does NOT
+    //     inventory dry ice, so it is NEVER emitted as an order line. When the
+    //     caller has already resolved live conditions (weather + calendar-aware
+    //     transit via resolveDryIceConditions), it passes them on
+    //     order.dryIceConditions; otherwise fall back to the sync estimate.
     dryIce = order.dryIceConditions || computeDryIce({ zip });
     if (!dryIce.zoneKnown) {
       warnings.push(
         `Dry ice: destination ZIP ${zip || '(none)'} not in the zone table — assumed Zone ${dryIce.zone} (${dryIce.blocks} block${dryIce.blocks > 1 ? 's' : ''}). CONFIRM.`
       );
     }
-    // Air shipments (Priority Shippers) must declare dry ice + are capped at 1
-    // slab (5 lb). Surface this to the packer so the platform's dry-ice button
-    // gets checked.
     if (dryIce.declareDryIce) {
       warnings.push(
         `AIR shipment via ${dryIce.carrier} — DECLARE dry ice on Priority Shippers (check the dry-ice button); max 1 slab (5 lb).`
       );
     }
-
-    // 2b) First-order welcome note (BW_WB) is NOT emitted here — it is a
-    //     ShipStation-only ride-along (Justin 2026-08-13), never a Datex pick.
   }
 
   // 3) Header. VendorReference carries the shipping SERVICE LEVEL per Bill
@@ -150,35 +150,30 @@ function buildOrderNode(order, opts = {}) {
     el('ShipmentHeaders', [el('ShipmentHeader', shipmentChildren)]),
   ]);
 
-  // Human-readable PACK LIST for the warehouse console (what to grab).
+  // Human-readable PACK LIST for the warehouse console (what to grab). Built
+  // from the same exploded bread lines used for the XML, so the two never drift.
   const CASE = cfg.CASE_PACK || {};
-  const contents = [];
-  for (const li of order.lineItems) {
-    const r = resolveMaterial(li);
-    if (r.code) contents.push({ code: r.code, qty: li.quantity, desc: (CASE[r.code] || {}).desc || r.code });
-    else if (r.kit && r.kit.explode)
-      for (const [code, qty] of r.kit.explode)
-        contents.push({ code, qty: qty * li.quantity, desc: (CASE[code] || {}).desc || code });
-  }
+  const contents = breadLines.map((b) => ({ code: b.code, qty: b.qty, desc: (CASE[b.code] || {}).desc || b.code }));
   const gelPacks = materialsOnly ? 0 : (PACKAGING.find((p) => p.code === 'BW_GELPK') || {}).qty || 0;
   const pack = {
     orderNumber: shipCode,
     materialsOnly,
-    loafUnits,
+    loafUnits: breadUnits,
     contents,
     box: materialsOnly ? null : 'BW_BOX14 — cardboard 14" cube',
     insulation: materialsOnly ? null : '2× Green Cell Foam panels (1")',
     gelPacks,
-    kraftPaper: 0, // freezer paper removed from XML (Bill 2026-08-13) — pack list only
+    kraftPaper: materialsOnly ? 0 : breadUnits, // BW_BFP — one sheet per bread unit
     dryIce,
     carrier: (dryIce && dryIce.carrier) || order.carrier || null,
     shipMode: (dryIce && dryIce.mode) || null, //          'ground' | 'air'
     declareDryIce: !!(dryIce && dryIce.declareDryIce), //  air => packer checks the dry-ice button
     welcomeBooklet: !materialsOnly && !!order.isFirstOrder,
-    insert: !materialsOnly && !!PACKAGING.find((p) => p.code === 'BW_Infosheet'),
+    insert: !materialsOnly, //  BW_INFOSHEET ships on every order now
+    blocking, //  reasons the order must NOT be sent (empty => clean)
   };
 
-  return { node: orderNode, warnings, pack };
+  return { node: orderNode, warnings, blocking, pack };
 }
 
 /**
@@ -188,9 +183,9 @@ function buildOrderNode(order, opts = {}) {
  */
 function buildCustomerOrder(order, opts = {}) {
   const { CONSTANTS: C } = cfg;
-  const { node, warnings, pack } = buildOrderNode(order, opts);
+  const { node, warnings, blocking, pack } = buildOrderNode(order, opts);
   const root = el('Orders', [node], { xmlns: C.namespace });
-  return { xml: toXml(root), warnings, pack };
+  return { xml: toXml(root), warnings, blocking, pack };
 }
 
 /**
@@ -210,10 +205,11 @@ function buildBatch(orders) {
   const results = [];
   const warnings = [];
   for (const order of orders) {
-    const { node, warnings: w, pack } = buildOrderNode(order);
+    const { node, warnings: w, blocking: b, pack } = buildOrderNode(order);
     nodes.push(node);
-    results.push({ number: String(order.number), warnings: w, pack });
+    results.push({ number: String(order.number), warnings: w, blocking: b, pack });
     w.forEach((msg) => warnings.push(`#${order.number}: ${msg}`));
+    b.forEach((msg) => warnings.push(`#${order.number}: BLOCKED — ${msg}`));
   }
   const root = el('Orders', nodes, { xmlns: C.namespace });
   return { xml: toXml(root), results, warnings, count: nodes.length };

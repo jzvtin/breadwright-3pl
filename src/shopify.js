@@ -63,7 +63,12 @@ function normalizeOrder(o, now = new Date()) {
       handle: li.handle || li.product_handle || '',
       sku: li.sku || '',
       title: li.title || li.name || '',
-      quantity: li.quantity || 1,
+      // current_quantity reflects order EDITS (a removed add-on reads 0). Prefer
+      // it; fall back to quantity only when it's absent. 0 is a real value — an
+      // edited-out line must stay 0 so the builder drops it, not resurrect it.
+      quantity: Number.isFinite(li.current_quantity) ? li.current_quantity : li.quantity || 1,
+      // Build-a-Box loaf choices ride here as Shopify name/value pairs.
+      properties: Array.isArray(li.properties) ? li.properties : [],
     })),
   };
 }

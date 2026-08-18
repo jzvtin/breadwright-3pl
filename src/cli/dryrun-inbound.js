@@ -17,10 +17,10 @@ const example = {
   lines: [
     { code: 'BW_CSD', amount: 1600 },
     { code: 'BW_MGP', amount: 1600 },
-    { code: 'BW_CranPec', amount: 1600 },
-    { code: 'BW_PFran', amount: 1600 },
+    { code: 'BW_CRANPEC', amount: 1600 },
+    { code: 'BW_PFRAN', amount: 1600 },
     { code: 'BW_DB2PK', amount: 1600 },
-    { code: 'BW_SeedSD', amount: 1600 },
+    { code: 'BW_SEEDSD', amount: 1600 },
   ],
 };
 
