@@ -100,6 +100,26 @@ fs.mkdirSync(SENT_DIR, { recursive: true });
 const alreadySent = (id) => fs.existsSync(path.join(SENT_DIR, `${id}.json`));
 const markSent = (id, meta) => fs.writeFileSync(path.join(SENT_DIR, `${id}.json`), JSON.stringify(meta));
 
+// PENDING REVIEW STORE. The Shopify orders/paid webhook STAGES each raw order
+// here (it does NOT auto-send); the console lists them and the operator confirms
+// each one. On-disk so it survives a process restart (a full Railway REDEPLOY
+// still clears it — acceptable; the order can be re-pushed or re-exported).
+// No Shopify Admin token needed: confirm-send rebuilds from the stored payload.
+const PENDING_DIR = path.join(__dirname, '../out/.pending');
+fs.mkdirSync(PENDING_DIR, { recursive: true });
+const pendingPath = (id) => path.join(PENDING_DIR, `${id}.json`);
+function savePending(id, rec) { fs.writeFileSync(pendingPath(id), JSON.stringify(rec)); }
+function removePending(id) { try { fs.unlinkSync(pendingPath(id)); } catch (_) {} }
+function listPending() {
+  return fs.readdirSync(PENDING_DIR).filter((f) => f.endsWith('.json')).map((f) => {
+    try { return JSON.parse(fs.readFileSync(path.join(PENDING_DIR, f), 'utf8')); } catch (_) { return null; }
+  }).filter(Boolean);
+}
+function findPendingByNumber(number) {
+  const bare = String(number).replace(/^#/, '');
+  return listPending().find((r) => String(r.number).replace(/^#/, '') === bare) || null;
+}
+
 app.get('/health', (_req, res) => res.json({ ok: true, dryRun: DRY_RUN }));
 
 app.get('/peek', async (req, res) => {
@@ -167,31 +187,53 @@ app.post('/peek/send-test', async (req, res) => {
 // valid SHOPIFY_ADMIN_TOKEN (read_orders + write_orders). Idempotent via the
 // Shopify `3pl-sent` tag, so a double-click / restart cannot double-drop.
 // ---------------------------------------------------------------------------
+function summarizeOrder(raw) {
+  const order = normalizeOrder(raw);
+  const { xml, warnings, blocking, pack } = buildCustomerOrder(order);
+  const s = order.shipping || {};
+  return {
+    number: order.number,
+    orderId: order.orderId,
+    customer: s.accountName || '',
+    city: s.city || '',
+    state: s.state || '',
+    serviceLevel: order.serviceLevel,
+    isFirstOrder: !!order.isFirstOrder,
+    warnings,
+    blocking,
+    canSend: (blocking || []).length === 0,
+    pack,
+    xml,
+  };
+}
+
 app.get('/peek/pending', async (req, res) => {
   if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
   const windowHours = Math.min(Math.max(Number(req.query.hours) || 25, 1), 24 * 30);
   try {
-    const raws = await fetchOrdersForBatch({ windowHours, sentTag: '3pl-sent' });
-    const orders = raws.map((raw) => {
-      const order = normalizeOrder(raw);
-      const { xml, warnings, blocking, pack } = buildCustomerOrder(order);
-      const s = order.shipping || {};
-      return {
-        number: order.number,
-        orderId: order.orderId,
-        customer: s.accountName || '',
-        city: s.city || '',
-        state: s.state || '',
-        serviceLevel: order.serviceLevel,
-        isFirstOrder: !!order.isFirstOrder,
-        warnings,
-        blocking,
-        canSend: (blocking || []).length === 0,
-        pack,
-        xml,
-      };
-    });
-    res.json({ dryRun: DRY_RUN, windowHours, count: orders.length, orders });
+    // Primary source: orders staged by the Shopify webhook (no token needed).
+    const byNumber = new Map();
+    for (const rec of listPending()) {
+      if (alreadySent(rec.id)) continue; // dropped since staging
+      const sum = summarizeOrder(rec.raw);
+      sum.receivedAt = rec.receivedAt;
+      byNumber.set(String(sum.number), sum);
+    }
+    // Bonus: if a valid Admin token is configured, also pull via the API and
+    // merge (webhook-staged wins on collision). Silently ignored without a token.
+    if (process.env.SHOPIFY_ADMIN_TOKEN) {
+      try {
+        const raws = await fetchOrdersForBatch({ windowHours, sentTag: '3pl-sent' });
+        for (const raw of raws) {
+          const sum = summarizeOrder(raw);
+          if (!byNumber.has(String(sum.number))) byNumber.set(String(sum.number), sum);
+        }
+      } catch (e) {
+        console.warn('[pending] Admin API merge skipped:', e.message);
+      }
+    }
+    const orders = Array.from(byNumber.values());
+    res.json({ dryRun: DRY_RUN, windowHours, source: 'webhook', count: orders.length, orders });
   } catch (e) {
     console.error('[pending] FAILED:', e);
     res.status(500).json({ error: e.message });
@@ -203,11 +245,17 @@ app.post('/peek/confirm-send', async (req, res) => {
   const number = String(req.query.number || (req.body && req.body.number) || '').trim();
   if (!number) return res.status(400).json({ error: 'missing ?number=<order number>' });
   try {
-    const raw = await fetchOrderRawByNumber(number);
-    if (!raw) return res.status(404).json({ error: `order #${number} not found` });
+    // Rebuild from the webhook-staged payload (no Admin token). Fall back to a
+    // live fetch only if a token is configured and the order isn't staged.
+    const rec = findPendingByNumber(number);
+    let raw = rec && rec.raw;
+    if (!raw && process.env.SHOPIFY_ADMIN_TOKEN) raw = await fetchOrderRawByNumber(number);
+    if (!raw) {
+      return res.status(404).json({ error: `order #${number} not in the review queue (staged orders are cleared on redeploy — re-push or re-export)` });
+    }
     const order = normalizeOrder(raw);
-    // Idempotency: never drop the same order twice (survives restarts via the tag).
-    if (alreadySent(order.orderId)) return res.json({ ok: true, already: true, number: order.number });
+    // Idempotency: never drop the same order twice (survives restarts on disk).
+    if (alreadySent(order.orderId)) { removePending(order.orderId); return res.json({ ok: true, already: true, number: order.number }); }
     order.dryIceConditions = await resolveDryIceConditions({ zip: order.shipping && order.shipping.postalCode });
     const { xml, warnings, blocking, pack } = buildCustomerOrder(order);
     // Defense in depth: the console disables Confirm on blocked orders, but the
@@ -217,9 +265,14 @@ app.post('/peek/confirm-send', async (req, res) => {
     const filename = `BW_${order.number}_${stamp}.xml`;
     const drop = await putXml(filename, xml);
     markSent(order.orderId, { number: order.number, filename, at: new Date().toISOString() });
+    removePending(order.orderId);
+    // Tag back to Shopify only if a token is configured; the drop already
+    // succeeded and the on-disk sent-marker is the real idempotency guard.
     let tagged = false;
-    try { await tagOrderSent(order.orderId); tagged = true; }
-    catch (e) { warnings.push(`Dropped OK but Shopify tagging failed: ${e.message}`); }
+    if (process.env.SHOPIFY_ADMIN_TOKEN) {
+      try { await tagOrderSent(order.orderId); tagged = true; }
+      catch (e) { warnings.push(`Dropped OK but Shopify tagging failed: ${e.message}`); }
+    }
     console.log(`[confirm-send] dropped ${filename} (#${order.number}) -> ${JSON.stringify(drop)}`);
     res.json({ ok: true, number: order.number, filename, drop, tagged, warnings, pack });
   } catch (e) {
@@ -395,17 +448,18 @@ app.post('/webhooks/shopify/orders', async (req, res) => {
       console.log(`[webhook] order ${o.id} already sent — skipping`);
       return;
     }
+    // STAGE for human review — do NOT auto-send. Store the raw payload so
+    // confirm-send can rebuild it later without any Shopify Admin token.
     const order = normalizeOrder(o);
-    const { xml, warnings } = buildCustomerOrder(order);
-    if (warnings.length) console.warn(`[webhook] order #${order.number} warnings:`, warnings);
-
-    const filename = `BW_${order.number}_${o.id}.xml`;
-    const result = await putXml(filename, xml);
-    markSent(o.id, { number: order.number, filename, at: new Date().toISOString(), result, warnings });
-    console.log(`[webhook] sent order #${order.number} (${filename})`);
+    const { warnings, blocking } = buildCustomerOrder(order);
+    savePending(o.id, { id: o.id, number: order.number, raw: o, receivedAt: new Date().toISOString() });
+    console.log(
+      `[webhook] staged order #${order.number} for review` +
+        (blocking && blocking.length ? ` (BLOCKED: ${blocking.join('; ')})` : '') +
+        (warnings && warnings.length ? ` (warnings: ${warnings.length})` : '')
+    );
   } catch (err) {
-    // TODO: push to a dead-letter/retry queue. For now, log loudly.
-    console.error(`[webhook] FAILED order ${o.id}:`, err);
+    console.error(`[webhook] FAILED to stage order ${o.id}:`, err);
   }
 });
 
