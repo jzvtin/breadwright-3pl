@@ -85,7 +85,10 @@ const WEBHOOK_SECRET = process.env.SHOPIFY_WEBHOOK_SECRET;
 // Read-only status peek (for the dynaradigital dashboard). Key-gated; the key is
 // held server-side by the dashboard proxy and never reaches a browser.
 const PEEK_KEY = process.env.PEEK_KEY;
-const PEEK_DIRS = ['/Test/to-icecube', '/Test/to-breadwright', '/Test/to-breadwright/processed', '/Test/Archive', '/Test/Error'];
+// Live Datex FootPrint folders (Bill deleted the old /Test/to-icecube + /Test/to-breadwright
+// convention 2026-08-18; the real paths are under /Datex). WE drop orders in Import/Test;
+// Ice Cube posts ship-confirms in Export/Test; Datex moves imported files to Archive / rejects to Error.
+const PEEK_DIRS = ['/Datex/Import/Test', '/Datex/Export/Test', '/Test/Archive', '/Test/Error'];
 const PEEK_ALLOWED = ['/Test', '/Datex'];
 
 // Capture the raw body for HMAC verification.
