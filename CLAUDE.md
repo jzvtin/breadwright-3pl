@@ -4,14 +4,16 @@ Auto-loaded by Claude Code when working in this repo. If you're a fresh Claude
 session picking this up: read this file first, then `FOR-MUHAMMAD.md` (overview),
 `NEEDS-FROM-BILL.md` (open questions), and `README.md` (how to run).
 
-## ⚠️ Surfaces (corrected 2026-08-14)
+## ⚠️ Surfaces (corrected 2026-08-18)
 - **Operator console = the PHP dashboard, LIVE at https://api.breadwrightbox.com**
-  (Apache/PHP on a DigitalOcean box, 67.205.31.25). This is the panel Justin uses.
-  It moved here FROM the old dynaradigital.com/breadwright (that old URL is dead).
-  The PHP is a thin proxy: it forwards `?action=` calls to the Railway API and
-  injects PEEK_KEY server-side. Source of truth for THIS file =
-  `deploy/breadwright-status.php`, but the LIVE copy on the DO host may run ahead —
-  pull before overwriting.
+  hosted on **DreamHost shared hosting** (NOT a DigitalOcean box — that earlier note
+  was wrong). Edit the live file over **SFTP**: host `iad1-shared-b7-36.dreamhost.com`,
+  user `dh_u9nmsm`, port 22, docroot `./api.breadwrightbox.com/index.php`. Password
+  is in the PO Drive 🔐 Logins doc, never here (this repo is public). It moved here
+  FROM the old dynaradigital.com/breadwright (that old URL is dead). The PHP is a
+  thin proxy: it forwards `?action=` calls to the Railway API and injects PEEK_KEY
+  server-side. **The LIVE index.php runs AHEAD of `deploy/breadwright-status.php`
+  — pull the live file, edit, atomic-swap back (upload `.new`, back up, rename).**
 - **API backend = the Railway node app** (`breadwright-3pl-production.up.railway.app`).
   All logic lives here: /peek, /peek/send-test (now unique #+address per drop),
   /peek/generate, pack lists, batch. The PHP console gets every backend fix for
@@ -35,6 +37,27 @@ Three flows:
    OrderClass `PO`) → SFTP.
 3. **Return feed** (skeleton) — poll SFTP for WMS ship-confirmations → write
    tracking into Shopify via Admin API.
+
+## Update 2026-08-18 — canonical SKU reconcile + review queue
+- **Source of truth for materials** is now `fixtures/breadwright_sku_map.json` +
+  `fixtures/BW_1003_datex_order.xml` (the map lives on a Shopify product metafield
+  too). `config/materials.js` was rewritten to match; `test/golden-1003.js` locks
+  it (regenerates #1003 and asserts the line set). Key rules now in force: codes are
+  canonical UPPER_SNAKE; all 8 boxes explode; `BW_INFOSHEET` + `BW_BFP` (1/bread
+  unit) + `BW_WB` (first order) ARE Datex lines (reversed the 08-13 hold-outs);
+  `BW_DRYICE` never is; read `current_quantity` (order edits); Entertainer box +
+  null-Datex-code add-ons (EVOO/butter) hard-block. OwnerReference kept `BWICCS`.
+- **Review-then-confirm queue is LIVE** (nothing auto-sends): `GET /peek/pending`
+  lists today's paid/unshipped/un-`3pl-sent` orders with XML + pack list + a
+  `blocking` list; `POST /peek/confirm-send?number=N` re-checks blocking (409 if
+  blocked), SFTP-drops, tags `3pl-sent` (idempotent). Console shows a **Review
+  queue** section at the top of api.breadwrightbox.com.
+- **⛔ BLOCKER:** `SHOPIFY_ADMIN_TOKEN` is INVALID on Railway (Shopify 401) and a
+  placeholder in local `.env`. The whole pull queue is inert until a valid custom-app
+  token (`read_orders`+`write_orders`) is set in Railway. It also blocks verifying
+  Build-a-Box parsing against a real order.
+- **Railway does NOT auto-deploy from GitHub** — after `git push`, run
+  `railway up --detach` (CLI is linked to project `breadwright-3pl`).
 
 ## Current status (as of last session, 2026-08-01)
 - ✅ Built and structurally **verified** against the 3PL's 3 sample XMLs.

@@ -1,7 +1,10 @@
 # Breadwright 3PL — SKU reconciliation + review-then-confirm queue
 
 Date: 2026-08-18
-Status: approved design, pre-implementation
+Status: SHIPPED. Project A (reconcile) done + verified (test/golden-1003.js),
+deployed to Railway. Project B (review queue) endpoints + console live, but inert
+until a valid SHOPIFY_ADMIN_TOKEN is set (see BLOCKER). Railway deployed via
+`railway up` (GitHub auto-deploy is not wired).
 
 ## Problem
 
