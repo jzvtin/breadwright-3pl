@@ -1,0 +1,18 @@
+# Keep the `railway up` upload snapshot small so it doesn't time out.
+# Railway rebuilds deps with `npm ci`, so node_modules must NOT be uploaded.
+node_modules
+.git
+out
+docs
+test
+examples
+deploy
+*.log
+*.bak
+.env
+sftp-check.js
+send-test-order.js
+dhls.js
+dhget.js
+dhput.js
+Check SFTP.bat
