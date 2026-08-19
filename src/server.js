@@ -187,14 +187,10 @@ app.post('/peek/send-test', async (req, res) => {
 // valid SHOPIFY_ADMIN_TOKEN (read_orders + write_orders). Idempotent via the
 // Shopify `3pl-sent` tag, so a double-click / restart cannot double-drop.
 // ---------------------------------------------------------------------------
-async function summarizeOrder(raw) {
+function summarizeOrder(raw) {
   const order = normalizeOrder(raw);
-  // Auto dry-ice from the ship-to (Fall River origin, weather + transit aware),
-  // so the queue pack ticket shows the real per-destination slab count. Never
-  // throws (falls back to the sync zone/season estimate inside the resolver).
-  try {
-    order.dryIceConditions = await resolveDryIceConditions({ zip: order.shipping && order.shipping.postalCode });
-  } catch (_) {}
+  // Dry ice is deterministic by service tier (buildCustomerOrder handles it), so
+  // no per-order weather lookup is needed here.
   const { xml, warnings, blocking, pack } = buildCustomerOrder(order);
   const s = order.shipping || {};
   const shipTo = [s.addressLine1, s.addressLine2, [s.city, s.state, s.postalCode].filter(Boolean).join(' ')]
@@ -227,7 +223,7 @@ app.get('/peek/pending', async (req, res) => {
     const byNumber = new Map();
     for (const rec of listPending()) {
       if (alreadySent(rec.id)) continue; // dropped since staging
-      const sum = await summarizeOrder(rec.raw);
+      const sum = summarizeOrder(rec.raw);
       sum.receivedAt = rec.receivedAt;
       byNumber.set(String(sum.number), sum);
     }
@@ -237,7 +233,7 @@ app.get('/peek/pending', async (req, res) => {
       try {
         const raws = await fetchOrdersForBatch({ windowHours, sentTag: '3pl-sent' });
         for (const raw of raws) {
-          const sum = await summarizeOrder(raw);
+          const sum = summarizeOrder(raw);
           if (!byNumber.has(String(sum.number))) byNumber.set(String(sum.number), sum);
         }
       } catch (e) {

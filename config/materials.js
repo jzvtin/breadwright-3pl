@@ -361,9 +361,14 @@ const SERVICE_TIERS = [
 const DEFAULT_SERVICE_TIER = '2_DAY';
 const DEFAULT_SERVICE_LEVEL = '2_DAY';
 
-// Slabs of dry ice the Manifest tier table calls for (reference only — the live
-// dry-ice figure is computed per order in config/dryice.js and wins on the ticket).
-const TIER_SLABS = { '1_DAY': 1, '2_DAY': 2, '3_DAY': 2, '1_AIR': 1, '2_AIR': 1 };
+// DEFINITIVE dry-ice-by-tier rule (Justin, 2026-08-18). Slabs are 5 lb each.
+//   1_DAY ground = none · 2_DAY ground = 2 · 1_AIR / 2_AIR = 1 each.
+//   3_DAY ground was not specified -> assumed 2 (CONFIRM).
+const TIER_SLABS = { '1_DAY': 0, '2_DAY': 2, '3_DAY': 2, '1_AIR': 1, '2_AIR': 1 };
+const SLAB_LB = 5;
+function dryIceSlabsForTier(tier) {
+  return TIER_SLABS[tier] != null ? TIER_SLABS[tier] : 2; // unknown tier -> safe 2
+}
 
 // Back-compat: some code still reads SERVICE_LEVELS.
 const SERVICE_LEVELS = SERVICE_TIERS.map((t) => ({ match: t.match, value: t.vref }));
@@ -404,6 +409,8 @@ module.exports = {
   SERVICE_LEVELS,
   SERVICE_TIERS,
   TIER_SLABS,
+  SLAB_LB,
+  dryIceSlabsForTier,
   DEFAULT_SERVICE_LEVEL,
   DEFAULT_SERVICE_TIER,
   resolveServiceLevel,

@@ -156,15 +156,18 @@ function buildOrderNode(order, opts = {}) {
   const CASE = cfg.CASE_PACK || {};
   const contents = breadLines.map((b) => ({ code: b.code, qty: b.qty, desc: (CASE[b.code] || {}).desc || b.code }));
   const gelPacks = materialsOnly ? 0 : (PACKAGING.find((p) => p.code === 'BW_GELPK') || {}).qty || 0;
-  const dryIceSlabs = (dryIce && dryIce.blocks) || 0;
+  // Dry ice is DETERMINISTIC by service tier (Justin 2026-08-18), not the weather
+  // estimate: 1_DAY=0, 2_DAY=2, 1_AIR/2_AIR=1 (5 lb slabs). The dryIce object is
+  // still kept for carrier/mode/notes on the pack sheet.
+  const dryIceSlabs = materialsOnly ? 0 : cfg.dryIceSlabsForTier(order.serviceTier);
   const pack = {
     orderNumber: shipCode,
     materialsOnly,
     serviceTier: order.serviceTier || null, //  1_DAY/2_DAY/3_DAY/1_AIR/2_AIR
     serviceLevel: order.serviceLevel || null, // Datex VendorReference
-    dryIceSlabs, //             count of 5 lb blocks
-    dryIceLb: dryIceSlabs * 5, // total dry-ice weight
-    gelPackOz: 24, //           each gel pack weight (Manifest §00)
+    dryIceSlabs, //             count of 5 lb slabs (tier-driven)
+    dryIceLb: dryIceSlabs * cfg.SLAB_LB, // total dry-ice weight
+    gelPackOz: 24, //           each gel pack weight (Manifest §00); qty 2 every order
     loafUnits: breadUnits,
     contents,
     box: materialsOnly ? null : 'BW_BOX14 — cardboard 14" cube',
