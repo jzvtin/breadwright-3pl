@@ -91,7 +91,7 @@ const PACK_DESC = {
   BW_BOX14: 'Cardboard shipping box 14x14x14',
   BW_GCF1: 'Green Cell Foam set 1 (Top/Long Side/Bottom)',
   BW_GCF2: 'Green Cell Foam set 2 (Side/Long Side/Side)',
-  BW_GELPK: 'Gel pack',
+  BW_GELPK: 'Gel pack (24 oz)',
   BW_INFOSHEET: 'Info sheet insert',
 };
 

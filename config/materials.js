@@ -226,7 +226,7 @@ const CASE_PACK = {
   BW_BOX14: { desc: 'Cardboard shipping box 14" cube' },
   BW_GCF1: { desc: 'Green Cell Foam set 1' },
   BW_GCF2: { desc: 'Green Cell Foam set 2' },
-  BW_GELPK: { desc: 'Gel pack' },
+  BW_GELPK: { desc: 'Gel pack (24 oz)' },
   BW_BFP: { desc: 'Kraft / freezer paper sheet' },
   BW_INFOSHEET: { desc: 'Info sheet' },
   BW_WB: { desc: 'Welcome note' },

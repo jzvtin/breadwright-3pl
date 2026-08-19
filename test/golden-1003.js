@@ -52,10 +52,15 @@ const { xml, blocking } = buildCustomerOrder(normalizeOrder(raw1003));
 const got = lineTotals(xml);
 const want = lineTotals(fs.readFileSync(path.join(__dirname, '../fixtures/BW_1003_datex_order.xml'), 'utf8'));
 
+// 2026-08-19 (Justin): BW_BFP, BW_INFOSHEET, BW_WB are no longer emitted to Datex.
+// Strip them from the canonical fixture totals before comparing.
+const REMOVED_CODES = ['BW_BFP', 'BW_INFOSHEET', 'BW_WB'];
+for (const c of REMOVED_CODES) delete want[c];
+
 const diffs = sameTotals(got, want);
-ok(diffs.length === 0, 'line multiset matches BW_1003 fixture' + (diffs.length ? ` -> ${diffs.join(' | ')}` : ''));
+ok(diffs.length === 0, 'line multiset matches BW_1003 fixture (BFP/INFOSHEET/WB excluded)' + (diffs.length ? ` -> ${diffs.join(' | ')}` : ''));
 ok((blocking || []).length === 0, 'clean order (removed add-ons do not block)');
-ok(got.BW_BFP === 7, 'BW_BFP = 7 (one per bread unit)');
+ok(REMOVED_CODES.every((c) => !(c in got)), 'BW_BFP / BW_INFOSHEET / BW_WB no longer emitted');
 ok(!('BW-BOX-01' in got) && !('BW_BOX01' in got), 'no box code emitted');
 ok(!('BW_DRYICE' in got), 'no dry-ice line');
 ok(!('BW-EVOO' in got) && !('BW-ADDON-02' in got), 'removed add-ons absent');
@@ -103,7 +108,7 @@ console.log('\n[build-a-box] property-driven parse + validation');
     line_items: [{ sku: 'BW_BAB6', title: 'Build a Box', quantity: 1, current_quantity: 1, properties: props }],
   }));
   const t = lineTotals(good.xml);
-  ok(good.blocking.length === 0 && t.BW_CSD === 2 && t.BW_BFP === 6, 'BAB6 parses 6 loaves, BW_BFP = 6');
+  ok(good.blocking.length === 0 && t.BW_CSD === 2 && !('BW_BFP' in t), 'BAB6 parses 6 loaves, no BW_BFP emitted');
 
   const bad = buildCustomerOrder(normalizeOrder({
     name: '#T5', shipping_address: addr, billing_address: addr,

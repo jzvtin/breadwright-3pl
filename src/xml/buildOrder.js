@@ -89,14 +89,11 @@ function buildOrderNode(order, opts = {}) {
   if (!materialsOnly) {
     // 2a) Packaging picks (box / Green Cell Foam / gel packs).
     for (const p of PACKAGING) emit(p.code, p.qty);
-    // 2b) Computed kraft/freezer paper — one sheet per bread unit on the order.
-    if (breadUnits > 0) emit(COMPUTED.kraftPaperCode, breadUnits);
-    // 2c) Inserts shipped on every order (info sheet).
-    for (const ins of INSERT_EVERY_ORDER) emit(ins.code, ins.qty);
-    // 2d) First-order welcome note (BW_WB) — only on the customer's first order.
-    if (order.isFirstOrder) emit(COMPUTED.welcomeNoteCode, 1);
+    // NOTE (2026-08-19, Justin): BW_BFP (kraft paper), BW_INFOSHEET (info sheet),
+    // and BW_WB (welcome booklet) are NO LONGER emitted to Datex. Emitted line set
+    // is now: bread + BW_BOX14 / BW_GCF1 / BW_GCF2 / BW_GELPK only.
 
-    // 2e) Dry ice — computed for the human pack sheet ONLY. Datex does NOT
+    // 2b) Dry ice — computed for the human pack sheet ONLY. Datex does NOT
     //     inventory dry ice, so it is NEVER emitted as an order line. When the
     //     caller has already resolved live conditions (weather + calendar-aware
     //     transit via resolveDryIceConditions), it passes them on
