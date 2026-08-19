@@ -191,10 +191,15 @@ function summarizeOrder(raw) {
   const order = normalizeOrder(raw);
   const { xml, warnings, blocking, pack } = buildCustomerOrder(order);
   const s = order.shipping || {};
+  const shipTo = [s.addressLine1, s.addressLine2, [s.city, s.state, s.postalCode].filter(Boolean).join(' ')]
+    .map((x) => (x || '').trim())
+    .filter(Boolean)
+    .join(', ');
   return {
     number: order.number,
     orderId: order.orderId,
     customer: s.accountName || '',
+    shipTo,
     city: s.city || '',
     state: s.state || '',
     serviceLevel: order.serviceLevel,
