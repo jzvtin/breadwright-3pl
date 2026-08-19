@@ -155,9 +155,15 @@ function buildOrderNode(order, opts = {}) {
   const CASE = cfg.CASE_PACK || {};
   const contents = breadLines.map((b) => ({ code: b.code, qty: b.qty, desc: (CASE[b.code] || {}).desc || b.code }));
   const gelPacks = materialsOnly ? 0 : (PACKAGING.find((p) => p.code === 'BW_GELPK') || {}).qty || 0;
+  const dryIceSlabs = (dryIce && dryIce.blocks) || 0;
   const pack = {
     orderNumber: shipCode,
     materialsOnly,
+    serviceTier: order.serviceTier || null, //  1_DAY/2_DAY/3_DAY/1_AIR/2_AIR
+    serviceLevel: order.serviceLevel || null, // Datex VendorReference
+    dryIceSlabs, //             count of 5 lb blocks
+    dryIceLb: dryIceSlabs * 5, // total dry-ice weight
+    gelPackOz: 24, //           each gel pack weight (Manifest §00)
     loafUnits: breadUnits,
     contents,
     box: materialsOnly ? null : 'BW_BOX14 — cardboard 14" cube',

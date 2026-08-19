@@ -203,6 +203,7 @@ function summarizeOrder(raw) {
     city: s.city || '',
     state: s.state || '',
     serviceLevel: order.serviceLevel,
+    serviceTier: order.serviceTier,
     isFirstOrder: !!order.isFirstOrder,
     warnings,
     blocking,

@@ -4,7 +4,7 @@
  * write-back. Network calls use Node's built-in fetch (Node 18+).
  */
 const crypto = require('crypto');
-const { resolveServiceLevel } = require('../config/materials');
+const { resolveServiceLevel, resolveServiceTier } = require('../config/materials');
 
 /** Verify a Shopify webhook HMAC. rawBody must be the exact bytes received. */
 function verifyWebhook(rawBody, hmacHeader, secret) {
@@ -54,7 +54,8 @@ function normalizeOrder(o, now = new Date()) {
     // Default: request delivery ~2 days out. Adjust to your SLA / cutoff logic.
     requestedDelivery: isoDate(now, 2),
     // Shipping speed the customer picked -> goes in <VendorReference> ("1 Day"/"2 Day"/...).
-    serviceLevel: resolveServiceLevel(o.shipping_lines),
+    serviceLevel: resolveServiceLevel(o.shipping_lines), //  Datex <VendorReference>
+    serviceTier: resolveServiceTier(o.shipping_lines), //   pack-list display tier
     // First order for this customer -> triggers first-order inserts (welcome booklet).
     isFirstOrder: !!(o.customer && Number(o.customer.orders_count) === 1),
     billing: mapAddr(bill, 'Customer'),

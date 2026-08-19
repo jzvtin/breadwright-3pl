@@ -310,20 +310,44 @@ function resolveBuildABox(box, lineItem) {
 }
 
 /**
- * Shipping SERVICE LEVEL for <VendorReference>. Bill (Ice Cube, 2026-08-13):
- * only two valid values, 1_DAY / 2_DAY. Anything else -> DEFAULT.
+ * TWO service concepts (Ship Day Manifest §00):
+ *   - Display TIER (on the pack list, drives dry-ice guidance): five granular
+ *     values 1_DAY / 2_DAY / 3_DAY / 1_AIR / 2_AIR.
+ *   - Datex <VendorReference>: the WMS-safe set 1_DAY / 2_DAY / 3_DAY / AIR
+ *     (both air tiers collapse to AIR for Datex, per Bill).
  */
-const SERVICE_LEVELS = [
-  { match: ['next day', 'overnight', '1 day', 'nextday', 'next_day', '1_day'], value: '1_DAY' },
-  { match: ['2 day', '2day', 'second day', 'two day', '2_day'], value: '2_DAY' },
+const SERVICE_TIERS = [
+  { match: ['next day air', 'nextday air', 'overnight air', '1_air', 'priority overnight'], tier: '1_AIR', vref: 'AIR' },
+  { match: ['2nd day air', 'second day air', 'two day air', '2 day air', '2day air', '2_air'], tier: '2_AIR', vref: 'AIR' },
+  { match: ['air'], tier: '1_AIR', vref: 'AIR' }, // bare "air" -> assume overnight
+  { match: ['3 day', '3day', 'three day', '3_day'], tier: '3_DAY', vref: '3_DAY' },
+  { match: ['2 day', '2day', 'second day', 'two day', '2_day'], tier: '2_DAY', vref: '2_DAY' },
+  { match: ['next day', 'overnight', '1 day', 'nextday', 'next_day', '1_day', 'ground'], tier: '1_DAY', vref: '1_DAY' },
 ];
+const DEFAULT_SERVICE_TIER = '2_DAY';
 const DEFAULT_SERVICE_LEVEL = '2_DAY';
 
-function resolveServiceLevel(shippingLines) {
+// Slabs of dry ice the Manifest tier table calls for (reference only — the live
+// dry-ice figure is computed per order in config/dryice.js and wins on the ticket).
+const TIER_SLABS = { '1_DAY': 1, '2_DAY': 2, '3_DAY': 2, '1_AIR': 1, '2_AIR': 1 };
+
+// Back-compat: some code still reads SERVICE_LEVELS.
+const SERVICE_LEVELS = SERVICE_TIERS.map((t) => ({ match: t.match, value: t.vref }));
+
+function matchTier(shippingLines) {
   const first = Array.isArray(shippingLines) ? shippingLines[0] : null;
   const hay = `${(first && first.title) || ''} ${(first && first.code) || ''}`.toLowerCase();
-  for (const s of SERVICE_LEVELS) if (s.match.some((m) => hay.includes(m))) return s.value;
-  return DEFAULT_SERVICE_LEVEL;
+  return SERVICE_TIERS.find((t) => t.match.some((m) => hay.includes(m))) || null;
+}
+/** Granular display tier for the pack list (1_DAY/2_DAY/3_DAY/1_AIR/2_AIR). */
+function resolveServiceTier(shippingLines) {
+  const t = matchTier(shippingLines);
+  return t ? t.tier : DEFAULT_SERVICE_TIER;
+}
+/** Datex <VendorReference> value (1_DAY/2_DAY/3_DAY/AIR). */
+function resolveServiceLevel(shippingLines) {
+  const t = matchTier(shippingLines);
+  return t ? t.vref : DEFAULT_SERVICE_LEVEL;
 }
 
 module.exports = {
@@ -344,8 +368,12 @@ module.exports = {
   ORDER_UDFS,
   INBOUND_UDFS,
   SERVICE_LEVELS,
+  SERVICE_TIERS,
+  TIER_SLABS,
   DEFAULT_SERVICE_LEVEL,
+  DEFAULT_SERVICE_TIER,
   resolveServiceLevel,
+  resolveServiceTier,
   resolveMaterial,
   resolveBuildABox,
 };
