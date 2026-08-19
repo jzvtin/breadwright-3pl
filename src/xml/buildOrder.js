@@ -6,6 +6,7 @@
  * Structure/field order mirrors "Sample Customer Order Shipment.xml".
  */
 const { el, toXml } = require('./util');
+const XML_PROLOG = '<?xml version="1.0" encoding="utf-8"?>\n';
 const { addressBlock } = require('./address');
 const cfg = require('../../config/materials');
 const { computeDryIce } = require('../../config/dryice');
@@ -191,7 +192,7 @@ function buildCustomerOrder(order, opts = {}) {
   const { CONSTANTS: C } = cfg;
   const { node, warnings, blocking, pack } = buildOrderNode(order, opts);
   const root = el('Orders', [node], { xmlns: C.namespace });
-  return { xml: toXml(root), warnings, blocking, pack };
+  return { xml: XML_PROLOG + toXml(root), warnings, blocking, pack };
 }
 
 /**
@@ -218,7 +219,7 @@ function buildBatch(orders) {
     b.forEach((msg) => warnings.push(`#${order.number}: BLOCKED — ${msg}`));
   }
   const root = el('Orders', nodes, { xmlns: C.namespace });
-  return { xml: toXml(root), results, warnings, count: nodes.length };
+  return { xml: XML_PROLOG + toXml(root), results, warnings, count: nodes.length };
 }
 
 /** Max <Order> per XML file (Bill 2026-08-13: "only 200 orders per xml"). */
