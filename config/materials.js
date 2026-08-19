@@ -255,18 +255,49 @@ const INBOUND_UDFS = [{ name: 'Order Completely entered and Verified?', value: '
  *   { blocked: reason }      -> a hard block (null-Datex-code add-on)
  *   { unknown: id }          -> unrecognized item (blocking; add to the map)
  */
+// Real-world SKU spelling variants seen in Shopify exports -> canonical box key.
+const BOX_ALIASES = {
+  'BW-INFL-BOX-6': 'BW_INFLBOX',
+  'BW-INFL-BOX-8': 'BW_INFLBOX',
+  'BW-INFLBOX': 'BW_INFLBOX',
+  'BW-BOX-01': 'BW-BOX-01',
+  'BW_BOX_01': 'BW-BOX-01',
+};
+// Box product TITLE (lowercased substring) -> canonical box key. Used when a
+// line item has a missing/odd SKU (e.g. a manually added box line).
+const BOX_BY_TITLE = [
+  { m: "founder", key: 'BW-BOX-01' },
+  { m: 'influencer', key: 'BW_INFLBOX' },
+  { m: 'classics', key: 'BW_CLASSICS' },
+  { m: "sourdough lover", key: 'BW_SDLOVER' },
+  { m: 'sandwich box', key: 'BW_SANDWICH' },
+  { m: 'entertainer', key: 'BW_ENTERTAINER' },
+  { m: 'build a box', key: 'BW_BAB6' },
+];
+function boxByTitle(title) {
+  const t = (title || '').toLowerCase();
+  const hit = BOX_BY_TITLE.find((b) => t.includes(b.m));
+  return hit ? hit.key : null;
+}
+
 function resolveMaterial(lineItem) {
   const handle = (lineItem.handle || '').toLowerCase().trim();
   const sku = (lineItem.sku || '').trim();
   const skuU = sku.toUpperCase();
   const title = (lineItem.title || '').trim();
 
-  // 1) Boxes (by SKU, then handle). Never emit the box code itself.
+  // 1) Boxes (by SKU, alias, handle, then title). Never emit the box code itself.
   if (BOX_EXPLODE[sku]) return { box: { key: sku, ...BOX_EXPLODE[sku] } };
   if (BOX_EXPLODE[skuU]) return { box: { key: skuU, ...BOX_EXPLODE[skuU] } };
+  if (BOX_ALIASES[skuU]) { const key = BOX_ALIASES[skuU]; return { box: { key, ...BOX_EXPLODE[key] } }; }
   if (handle && BOX_HANDLES[handle]) {
     const key = BOX_HANDLES[handle];
     return { box: { key, ...BOX_EXPLODE[key] } };
+  }
+  // Title match only when there's no SKU (avoid overriding a real loaf SKU).
+  if (!sku && !handle) {
+    const bt = boxByTitle(title);
+    if (bt) return { box: { key: bt, ...BOX_EXPLODE[bt] } };
   }
 
   // 2) Null-Datex-code add-ons -> hard block.
