@@ -237,7 +237,10 @@ const CASE_PACK = {
  * the verified flag.
  */
 const ORDER_UDFS = [
-  { name: 'Order Completely entered and Verified?', value: 'true' },
+  // Manifest §02/§09-q02: defaults FALSE — the packer flips it TRUE after
+  // physically verifying the box. (Bill's early sample had 'true'; confirm Datex
+  // still imports an unverified order before go-live.)
+  { name: 'Order Completely entered and Verified?', value: 'false' },
   { name: 'Pallet Exchange', value: 'false' },
   { name: 'TempTailRequired', value: 'false' },
   { name: 'PlacardsRequired', value: 'false' },
