@@ -485,7 +485,7 @@ app.get('/orders.csv', async (req, res) => {
              (process.env.EXPORT_KEY && req.query.key === process.env.EXPORT_KEY);
   if (!ok) return res.status(401).send('unauthorized — append ?key=<key>');
   try {
-    const { csv, count } = await buildOrdersCsv({ since: req.query.since });
+    const { csv, count } = await buildOrdersCsv({ since: req.query.since, full: req.query.full });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('X-Order-Count', String(count));
     if (req.query.download) {

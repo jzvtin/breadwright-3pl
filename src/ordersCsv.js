@@ -8,15 +8,21 @@ const API_VERSION = process.env.SHOPIFY_API_VERSION || '2024-10';
 const { normalizeOrder } = require('./shopify');
 const { buildCustomerOrder } = require('./xml/buildOrder');
 
-// Ordered for scanning: what to pack + who's paid first, then ship-to, then
-// contact/money/misc. Header row + this order also drive the sheet layout.
-const COLUMNS = [
+// FULL set (?full=1) — everything, for ops/export.
+const FULL_COLUMNS = [
   'order', 'created_at', 'financial_status', 'fulfillment_status',
   'customer_name', 'exploded_items', 'blocked',
   'ship_name', 'ship_address1', 'ship_city', 'ship_province', 'ship_zip', 'ship_country',
   'phone', 'email',
   'items', 'subtotal', 'shipping', 'taxes', 'total', 'currency',
   'discount_codes', 'note', 'tags',
+];
+// LEAN default — the clean pack-and-ship view for the shared sheet. Order,
+// paid/fulfilled status, customer, the loaves to pack, any block, ship-to, total.
+const LEAN_COLUMNS = [
+  'order', 'created_at', 'financial_status', 'fulfillment_status',
+  'customer_name', 'exploded_items', 'blocked',
+  'ship_name', 'ship_address1', 'ship_city', 'ship_province', 'ship_zip', 'total',
 ];
 
 // Run the same explode the XML builder uses, so the sheet shows the real loaves
@@ -88,7 +94,8 @@ function nextPageInfo(linkHeader) {
  * @param {string} [opts.since] ISO date string; only orders created on/after.
  * @returns {Promise<{csv:string, count:number}>}
  */
-async function buildOrdersCsv({ since } = {}) {
+async function buildOrdersCsv({ since, full } = {}) {
+  const COLUMNS = full ? FULL_COLUMNS : LEAN_COLUMNS;
   // Dedicated read-only export credentials, independent of the batch's
   // SHOPIFY_STORE / SHOPIFY_ADMIN_TOKEN (which needs write_orders and is a
   // separate concern). Falls back to the shared admin creds if the dedicated
@@ -127,4 +134,4 @@ async function buildOrdersCsv({ since } = {}) {
   return { csv, count: rows.length };
 }
 
-module.exports = { buildOrdersCsv, COLUMNS };
+module.exports = { buildOrdersCsv, FULL_COLUMNS, LEAN_COLUMNS };
