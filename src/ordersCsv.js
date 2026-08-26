@@ -5,14 +5,32 @@
  * No new dependency, no disk writes — the caller streams the result.
  */
 const API_VERSION = process.env.SHOPIFY_API_VERSION || '2024-10';
+const { normalizeOrder } = require('./shopify');
+const { buildCustomerOrder } = require('./xml/buildOrder');
 
 const COLUMNS = [
   'order', 'created_at', 'financial_status', 'fulfillment_status',
   'email', 'phone', 'customer_name',
   'ship_name', 'ship_address1', 'ship_city', 'ship_province', 'ship_zip', 'ship_country',
   'subtotal', 'shipping', 'taxes', 'total', 'currency',
-  'discount_codes', 'items', 'note', 'tags',
+  'discount_codes', 'items', 'exploded_items', 'blocked', 'note', 'tags',
 ];
+
+// Run the same explode the XML builder uses, so the sheet shows the real loaves
+// (Build-a-Box etc.) not just the storefront title. Pure/sync — no network.
+// Never throws: any build error just leaves the columns blank for that row.
+function explodeOrder(raw) {
+  try {
+    const order = normalizeOrder(raw);
+    const { pack, blocking } = buildCustomerOrder(order);
+    const exploded = (pack && pack.contents || [])
+      .map((c) => `${c.qty}× ${c.desc || c.code}`).join('; ');
+    const blocked = (blocking && blocking.length) ? blocking.join(' | ') : '';
+    return { exploded, blocked };
+  } catch (e) {
+    return { exploded: '', blocked: '' };
+  }
+}
 
 function csvCell(v) {
   if (v === null || v === undefined) return '';
@@ -24,6 +42,7 @@ function rowFrom(o) {
   const ship = o.shipping_address || {};
   const cust = o.customer || {};
   const shipMoney = o.total_shipping_price_set && o.total_shipping_price_set.shop_money;
+  const { exploded, blocked } = explodeOrder(o);
   return {
     order: o.name,
     created_at: o.created_at,
@@ -45,6 +64,8 @@ function rowFrom(o) {
     currency: o.currency,
     discount_codes: (o.discount_codes || []).map((d) => d.code).join('|'),
     items: (o.line_items || []).map((l) => `${l.quantity}x ${l.title}`).join('; '),
+    exploded_items: exploded,
+    blocked,
     note: o.note || '',
     tags: o.tags || '',
   };
