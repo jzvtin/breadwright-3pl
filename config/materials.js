@@ -318,29 +318,56 @@ function resolveMaterial(lineItem) {
 
 /**
  * Parse Build-a-Box chosen loaves from a line item's `properties` array.
- * Properties are Shopify name/value pairs; we collect every value (and, if a
- * value is a comma/newline list, every element) that maps to a known loaf.
+ * Shopify's Build-a-Box app writes TWO representations of the same picks:
+ *   1. One property per loaf, name = loaf, value = integer qty
+ *      (e.g. { name: 'Country Sourdough', value: '2' }).
+ *   2. A single `Loaves` summary, value = "2× Country Sourdough, 1× Pane Francese".
+ * We read (1) primarily (qty lives in the VALUE, not the count of pieces); if no
+ * per-loaf props parse, we fall back to the "N× Name" summary. Hidden props
+ * (name starts with `_`, e.g. `_box_size`) are ignored.
  * @returns {{ lines: object } | { blocked: string }}
  */
 function resolveBuildABox(box, lineItem) {
   const props = Array.isArray(lineItem.properties) ? lineItem.properties : [];
-  const chosen = [];
+  const counts = {};
+  let total = 0;
+  const add = (code, qty) => {
+    if (code && qty > 0) {
+      counts[code] = (counts[code] || 0) + qty;
+      total += qty;
+    }
+  };
+
+  // Primary: one property per loaf — name is the loaf, value is the integer qty.
   for (const p of props) {
     if (!p || p.name == null) continue;
-    if (String(p.name).startsWith('_')) continue; // hidden/app props
-    for (const piece of String(p.value == null ? '' : p.value).split(/[,;\n]/)) {
-      const code = loafCodeFromName(piece);
-      if (code) chosen.push(code);
+    const name = String(p.name);
+    if (name.startsWith('_')) continue; // hidden/app props
+    if (name.trim().toLowerCase() === 'loaves') continue; // summary, used as fallback only
+    const code = loafCodeFromName(name);
+    if (!code) continue;
+    const qty = parseInt(String(p.value == null ? '' : p.value).replace(/[^0-9]/g, ''), 10) || 0;
+    add(code, qty);
+  }
+
+  // Fallback: no per-loaf props parsed — read the "Loaves" summary "N× Name, ...".
+  if (total === 0) {
+    for (const p of props) {
+      if (!p || p.name == null) continue;
+      if (String(p.name).startsWith('_')) continue;
+      for (const piece of String(p.value == null ? '' : p.value).split(/[,;\n]/)) {
+        const m = piece.match(/^\s*(\d+)\s*[×x*]\s*(.+?)\s*$/); // "2× Country Sourdough"
+        add(loafCodeFromName(m ? m[2] : piece), m ? parseInt(m[1], 10) || 1 : 1);
+      }
     }
   }
-  if (chosen.length !== box.breadUnits) {
+
+  if (total !== box.breadUnits) {
     return {
-      blocked: `Build-a-Box (${box.name}) expected ${box.breadUnits} loaves but parsed ${chosen.length} from line-item properties — resolve in Shopify before sending.`,
+      blocked: `Build-a-Box (${box.name}) expected ${box.breadUnits} loaves but parsed ${total} from line-item properties — resolve in Shopify before sending.`,
     };
   }
-  const lines = {};
-  for (const code of chosen) lines[code] = (lines[code] || 0) + 1;
-  return { lines };
+  return { lines: counts };
 }
 
 /**
