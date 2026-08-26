@@ -20,6 +20,7 @@ const { resolveDryIceConditions } = require('../config/dryice');
 const { putXml, peekList, peekFile, sendToTest, DRY_RUN } = require('./sftp');
 const { registerDashboard } = require('./dashboard');
 const { runBatch } = require('./batch');
+const { buildOrdersCsv } = require('./ordersCsv');
 
 // Named Breadwright example orders the dashboard can fire as a live test.
 const TEST_FIXTURES = {
@@ -468,6 +469,27 @@ app.post('/webhooks/shopify/orders', async (req, res) => {
     );
   } catch (err) {
     console.error(`[webhook] FAILED to stage order ${o.id}:`, err);
+  }
+});
+
+// Orders CSV export (real customer data — key-gated like /peek/*).
+//   GET /orders.csv?key=<PEEK_KEY>[&since=2026-01-01][&download=1]
+// Pulls every order live from Shopify via the dedicated read-only export token
+// (SHOPIFY_EXPORT_STORE / SHOPIFY_EXPORT_TOKEN) and streams a CSV. No disk write,
+// so Railway's ephemeral filesystem is a non-issue.
+app.get('/orders.csv', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).send('unauthorized — append ?key=<PEEK_KEY>');
+  try {
+    const { csv, count } = await buildOrdersCsv({ since: req.query.since });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('X-Order-Count', String(count));
+    if (req.query.download) {
+      const stamp = new Date().toISOString().slice(0, 10);
+      res.setHeader('Content-Disposition', `attachment; filename="breadwright-orders-${stamp}.csv"`);
+    }
+    res.send(csv);
+  } catch (e) {
+    res.status(502).send(`export failed: ${e.message}`);
   }
 });
 
