@@ -8,12 +8,15 @@ const API_VERSION = process.env.SHOPIFY_API_VERSION || '2024-10';
 const { normalizeOrder } = require('./shopify');
 const { buildCustomerOrder } = require('./xml/buildOrder');
 
+// Ordered for scanning: what to pack + who's paid first, then ship-to, then
+// contact/money/misc. Header row + this order also drive the sheet layout.
 const COLUMNS = [
   'order', 'created_at', 'financial_status', 'fulfillment_status',
-  'email', 'phone', 'customer_name',
+  'customer_name', 'exploded_items', 'blocked',
   'ship_name', 'ship_address1', 'ship_city', 'ship_province', 'ship_zip', 'ship_country',
-  'subtotal', 'shipping', 'taxes', 'total', 'currency',
-  'discount_codes', 'items', 'exploded_items', 'blocked', 'note', 'tags',
+  'phone', 'email',
+  'items', 'subtotal', 'shipping', 'taxes', 'total', 'currency',
+  'discount_codes', 'note', 'tags',
 ];
 
 // Run the same explode the XML builder uses, so the sheet shows the real loaves
