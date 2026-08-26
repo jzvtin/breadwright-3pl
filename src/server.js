@@ -478,7 +478,12 @@ app.post('/webhooks/shopify/orders', async (req, res) => {
 // (SHOPIFY_EXPORT_STORE / SHOPIFY_EXPORT_TOKEN) and streams a CSV. No disk write,
 // so Railway's ephemeral filesystem is a non-issue.
 app.get('/orders.csv', async (req, res) => {
-  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).send('unauthorized — append ?key=<PEEK_KEY>');
+  // Accepts PEEK_KEY (operator) OR a dedicated export-only EXPORT_KEY. The
+  // export key unlocks NOTHING but this CSV, so it is safe to embed in a shared
+  // Google Sheet / hand to the store owner. PEEK_KEY must never be shared.
+  const ok = (PEEK_KEY && req.query.key === PEEK_KEY) ||
+             (process.env.EXPORT_KEY && req.query.key === process.env.EXPORT_KEY);
+  if (!ok) return res.status(401).send('unauthorized — append ?key=<key>');
   try {
     const { csv, count } = await buildOrdersCsv({ since: req.query.since });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
