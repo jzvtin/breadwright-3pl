@@ -550,10 +550,21 @@ app.get('/peek/rate', async (reqE, res) => {
     if (!raw) return res.status(404).json({ error: 'order ' + number + ' not found' });
     const order = normalizeOrder(raw);
     const { shipment } = ss.buildTestShipment(order, { includePackaging: true });
+    // Explicit ship-from = the Ice Cube warehouse (label origin). Fixes the
+    // "Ship Address Line 1 missing" invalid-rate flag from an incomplete warehouse.
+    shipment.ship_from = {
+      name: 'Breadwright', company_name: 'Ice Cube Cold Storage', phone: '5086857346',
+      address_line1: '451 Currant Road', city_locality: 'Fall River',
+      state_province: 'MA', postal_code: '02720', country_code: 'US',
+      address_residential_indicator: 'no',
+    };
     const UPS = process.env.SHIPSTATION_UPS_CARRIER_ID || 'se-6593179';
     const r = await ss.getRates(shipment, [UPS]);
     if (reqE.query.debug) return res.json({ sent_shipment: shipment, ups_carrier: UPS, raw: r });
-    const rates = (r.body && r.body.rate_response && r.body.rate_response.rates) || [];
+    const rr = (r.body && r.body.rate_response) || {};
+    // Prices live in valid `rates`; if a validation flag pushed them to
+    // `invalid_rates`, the amounts are still accurate — use both for the preview.
+    const rates = [...(rr.rates || []), ...(rr.invalid_rates || [])];
     const amt = (x) => (x && x.shipping_amount && x.shipping_amount.amount);
     const days = (x) => (x && (x.delivery_days != null ? x.delivery_days : x.carrier_delivery_days));
     const cheapest = (code) => rates.filter((x) => x.service_code === code)
