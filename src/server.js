@@ -552,6 +552,7 @@ app.get('/peek/rate', async (reqE, res) => {
     const { shipment } = ss.buildTestShipment(order, { includePackaging: true });
     const UPS = process.env.SHIPSTATION_UPS_CARRIER_ID || 'se-6593179';
     const r = await ss.getRates(shipment, [UPS]);
+    if (reqE.query.debug) return res.json({ sent_shipment: shipment, ups_carrier: UPS, raw: r });
     const rates = (r.body && r.body.rate_response && r.body.rate_response.rates) || [];
     const amt = (x) => (x && x.shipping_amount && x.shipping_amount.amount);
     const days = (x) => (x && (x.delivery_days != null ? x.delivery_days : x.carrier_delivery_days));
