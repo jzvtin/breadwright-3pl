@@ -524,6 +524,8 @@ app.get('/peek/order-xml', async (req, res) => {
     res.setHeader('Content-Type', 'text/xml; charset=utf-8');
     // Surface warnings/blocking as an XML comment in the body (headers can't hold
     // non-ASCII like em-dashes/°). Comment-safe: strip any "--" sequences.
+    // ?clean=1 => pure XML for the Ice Cube email attachment (no inspector comment).
+    if (req.query.clean) { res.send(xml); return; }
     const note = [];
     if (blocking && blocking.length) note.push('BLOCKING:\n- ' + blocking.join('\n- '));
     if (warnings && warnings.length) note.push('WARNINGS:\n- ' + warnings.join('\n- '));
