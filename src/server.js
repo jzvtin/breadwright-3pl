@@ -536,6 +536,17 @@ app.get('/peek/order-xml', async (req, res) => {
   }
 });
 
+// Read-only ShipStation account state — which carriers (UPS?) are connected +
+// funding. Buys NOTHING. Answers "can we print UPS labels yet?".
+app.get('/peek/carriers', async (reqE, res) => {
+  if (!PEEK_KEY || reqE.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const ss = require('./shipstation');
+    const carriers = await ss.req('GET', '/v2/carriers');
+    res.json(carriers);
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
 // Combined Datex XML for MULTIPLE orders (one <Orders> batch envelope) — for
 // Sam to attach ONE file covering several orders to his Ice Cube email.
 //   GET /peek/batch-xml?key=<PEEK_KEY>&numbers=1036,1035,1034
