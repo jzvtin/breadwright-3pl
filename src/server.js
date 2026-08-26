@@ -552,6 +552,8 @@ app.get('/peek/rate', async (reqE, res) => {
     const { shipment } = ss.buildTestShipment(order, { includePackaging: true });
     // Explicit ship-from = the Ice Cube warehouse (label origin). Fixes the
     // "Ship Address Line 1 missing" invalid-rate flag from an incomplete warehouse.
+    // ship_from and warehouse_id are mutually exclusive — drop the warehouse.
+    delete shipment.warehouse_id;
     shipment.ship_from = {
       name: 'Breadwright', company_name: 'Ice Cube Cold Storage', phone: '5086857346',
       address_line1: '451 Currant Road', city_locality: 'Fall River',
