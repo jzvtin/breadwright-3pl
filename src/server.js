@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const { verifyWebhook, normalizeOrder, confirmShipment, fetchOrderRawByNumber, fetchOrdersForBatch, tagOrderSent } = require('./shopify');
-const { buildCustomerOrder } = require('./xml/buildOrder');
+const { buildCustomerOrder, buildBatch } = require('./xml/buildOrder');
 const { packSlipHtml } = require('./packslip');
 const { resolveDryIceConditions } = require('../config/dryice');
 const { putXml, peekList, peekFile, sendToTest, DRY_RUN } = require('./sftp');
@@ -533,6 +533,31 @@ app.get('/peek/order-xml', async (req, res) => {
     res.send(banner + xml);
   } catch (e) {
     res.status(502).send('build failed: ' + e.message);
+  }
+});
+
+// Combined Datex XML for MULTIPLE orders (one <Orders> batch envelope) — for
+// Sam to attach ONE file covering several orders to his Ice Cube email.
+//   GET /peek/batch-xml?key=<PEEK_KEY>&numbers=1036,1035,1034
+app.get('/peek/batch-xml', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).send('unauthorized');
+  const numbers = String(req.query.numbers || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (!numbers.length) return res.status(400).send('missing ?numbers=1036,1035');
+  try {
+    const orders = [];
+    const missing = [];
+    for (const n of numbers) {
+      const raw = await fetchOrderRawByNumber(n);
+      if (raw) orders.push(normalizeOrder(raw)); else missing.push(n);
+    }
+    if (!orders.length) return res.status(404).send('no orders found for: ' + numbers.join(','));
+    const { xml, count } = buildBatch(orders);
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('X-Order-Count', String(count));
+    if (missing.length) res.setHeader('X-Missing', missing.join(','));
+    res.send(xml);
+  } catch (e) {
+    res.status(502).send('batch build failed: ' + e.message);
   }
 });
 
