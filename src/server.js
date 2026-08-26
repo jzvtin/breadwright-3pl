@@ -498,6 +498,28 @@ app.get('/orders.csv', async (req, res) => {
   }
 });
 
+// Inspect the Datex XML a single order WOULD produce (read-only, no send).
+//   GET /peek/order-xml?key=<PEEK_KEY>&number=1038
+// Pulls the live order from Shopify, normalizes, builds the customer-order XML.
+app.get('/peek/order-xml', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).send('unauthorized');
+  const number = req.query.number;
+  if (!number) return res.status(400).send('missing ?number=');
+  try {
+    const raw = await fetchOrderRawByNumber(number);
+    if (!raw) return res.status(404).send('order ' + number + ' not found');
+    const order = normalizeOrder(raw);
+    order.dryIceConditions = await resolveDryIceConditions({ zip: order.shipping && order.shipping.postalCode });
+    const { xml, warnings, blocking } = buildCustomerOrder(order);
+    res.setHeader('Content-Type', 'text/xml; charset=utf-8');
+    if (warnings && warnings.length) res.setHeader('X-Warnings', JSON.stringify(warnings).slice(0, 800));
+    if (blocking && blocking.length) res.setHeader('X-Blocking', JSON.stringify(blocking).slice(0, 800));
+    res.send(xml);
+  } catch (e) {
+    res.status(502).send('build failed: ' + e.message);
+  }
+});
+
 // Operator console at / (api.breadwright.com) — registered last so it only
 // claims the root path, never shadowing /health, /peek/*, /packslip/*, etc.
 registerDashboard(app);
