@@ -536,6 +536,47 @@ app.get('/peek/order-xml', async (req, res) => {
   }
 });
 
+// COST-CONTROL rate preview (READ-ONLY, buys nothing). For an order, rate-shops
+// UPS and returns the LOCKED service by the rule: cheapest that arrives <=2
+// business days => UPS Ground if it delivers in <=2 days, else UPS 2nd Day Air.
+//   GET /peek/rate?key=<PEEK_KEY>&number=1036
+app.get('/peek/rate', async (reqE, res) => {
+  if (!PEEK_KEY || reqE.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  const number = reqE.query.number;
+  if (!number) return res.status(400).json({ error: 'missing ?number=' });
+  try {
+    const ss = require('./shipstation');
+    const raw = await fetchOrderRawByNumber(number);
+    if (!raw) return res.status(404).json({ error: 'order ' + number + ' not found' });
+    const order = normalizeOrder(raw);
+    const { shipment } = ss.buildTestShipment(order, { includePackaging: true });
+    const UPS = process.env.SHIPSTATION_UPS_CARRIER_ID || 'se-6593179';
+    const r = await ss.getRates(shipment, [UPS]);
+    const rates = (r.body && r.body.rate_response && r.body.rate_response.rates) || [];
+    const amt = (x) => (x && x.shipping_amount && x.shipping_amount.amount);
+    const days = (x) => (x && (x.delivery_days != null ? x.delivery_days : x.carrier_delivery_days));
+    const cheapest = (code) => rates.filter((x) => x.service_code === code)
+      .sort((a, b) => (amt(a) || 1e9) - (amt(b) || 1e9))[0] || null;
+    const ground = cheapest('ups_ground');
+    const air2 = cheapest('ups_2nd_day_air');
+    const gDays = days(ground);
+    const groundOk = ground && gDays != null && gDays <= 2;
+    const lockedCode = groundOk ? 'ups_ground' : 'ups_2nd_day_air';
+    const chosen = groundOk ? ground : air2;
+    res.json({
+      order: order.number,
+      locked_service: lockedCode,
+      locked_label: groundOk ? 'UPS Ground' : 'UPS 2nd Day Air',
+      price: amt(chosen),
+      reason: groundOk ? `ground delivers in ${gDays} business day(s) (<=2)` : 'ground too slow (>2 days) or unavailable -> 2nd Day Air',
+      ground: ground ? { price: amt(ground), days: gDays } : null,
+      second_day_air: air2 ? { price: amt(air2), days: days(air2) } : null,
+      rates_returned: rates.length,
+      errors: (r.body && r.body.rate_response && r.body.rate_response.errors) || null,
+    });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
 // Read-only ShipStation account state — which carriers (UPS?) are connected +
 // funding. Buys NOTHING. Answers "can we print UPS labels yet?".
 app.get('/peek/carriers', async (reqE, res) => {

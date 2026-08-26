@@ -195,4 +195,15 @@ async function tagShipment(shipmentId, tag) {
   return req('POST', `/v2/shipments/${shipmentId}/tags/${encodeURIComponent(tag)}`);
 }
 
-module.exports = { loafItems, packagingItems, buildTestShipment, createShipments, tagShipment, req, unitOz, WAREHOUSE_ID };
+/**
+ * Rate-shop a shipment (READ-ONLY — buys nothing). Returns all carrier rates.
+ * @param {object} shipment  a v2 shipment (ship_to + warehouse_id + packages)
+ * @param {string[]} carrierIds  restrict to these carriers (the Breadwright UPS)
+ */
+async function getRates(shipment, carrierIds) {
+  if (!API_KEY) throw new Error('SHIPSTATION_API_KEY not set');
+  const body = { shipment: { ...shipment, validate_address: 'no_validation' }, rate_options: { carrier_ids: carrierIds } };
+  return req('POST', '/v2/rates', body);
+}
+
+module.exports = { loafItems, packagingItems, buildTestShipment, createShipments, tagShipment, getRates, req, unitOz, WAREHOUSE_ID };
