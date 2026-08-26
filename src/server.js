@@ -508,6 +508,16 @@ app.get('/peek/order-xml', async (req, res) => {
   try {
     const raw = await fetchOrderRawByNumber(number);
     if (!raw) return res.status(404).send('order ' + number + ' not found');
+    if (req.query.raw) {
+      return res.json({
+        name: raw.name,
+        note_attributes: raw.note_attributes || [],
+        line_items: (raw.line_items || []).map((li) => ({
+          title: li.title, sku: li.sku, quantity: li.quantity,
+          properties: li.properties || [],
+        })),
+      });
+    }
     const order = normalizeOrder(raw);
     order.dryIceConditions = await resolveDryIceConditions({ zip: order.shipping && order.shipping.postalCode });
     const { xml, warnings, blocking } = buildCustomerOrder(order);
