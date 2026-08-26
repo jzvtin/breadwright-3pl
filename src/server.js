@@ -512,9 +512,13 @@ app.get('/peek/order-xml', async (req, res) => {
     order.dryIceConditions = await resolveDryIceConditions({ zip: order.shipping && order.shipping.postalCode });
     const { xml, warnings, blocking } = buildCustomerOrder(order);
     res.setHeader('Content-Type', 'text/xml; charset=utf-8');
-    if (warnings && warnings.length) res.setHeader('X-Warnings', JSON.stringify(warnings).slice(0, 800));
-    if (blocking && blocking.length) res.setHeader('X-Blocking', JSON.stringify(blocking).slice(0, 800));
-    res.send(xml);
+    // Surface warnings/blocking as an XML comment in the body (headers can't hold
+    // non-ASCII like em-dashes/°). Comment-safe: strip any "--" sequences.
+    const note = [];
+    if (blocking && blocking.length) note.push('BLOCKING:\n- ' + blocking.join('\n- '));
+    if (warnings && warnings.length) note.push('WARNINGS:\n- ' + warnings.join('\n- '));
+    const banner = note.length ? '<!--\n' + note.join('\n').replace(/--/g, '- -') + '\n-->\n' : '';
+    res.send(banner + xml);
   } catch (e) {
     res.status(502).send('build failed: ' + e.message);
   }
