@@ -1,17 +1,19 @@
 /**
  * src/mailer.js
- * Plain SMTP email sender (no paid API). Uses nodemailer against any normal
- * mailbox — DreamHost, Gmail app-password, etc. Safe NO-OP that just logs the
- * intended recipients until SMTP creds are set, so nothing breaks meanwhile.
+ * Email sender with two transports, picked automatically:
+ *   1. Resend HTTP API (RESEND_API_KEY) — sends over HTTPS/443. USE THIS ON
+ *      RAILWAY: Railway blocks outbound SMTP ports, so plain SMTP times out there.
+ *   2. SMTP (nodemailer) — any normal mailbox, for hosts that allow SMTP.
+ * Falls back to a safe NO-OP (logs intended recipients) until one is configured.
  *
- * Env (all optional until you want real sends):
- *   SMTP_HOST   e.g. smtp.dreamhost.com  |  smtp.gmail.com
- *   SMTP_PORT   465 (SSL, default) or 587 (STARTTLS)
- *   SMTP_USER   full mailbox address, e.g. j@dynaradigital.com
- *   SMTP_PASS   that mailbox's password (Gmail: a 16-char App Password)
- *   MAIL_FROM   defaults to SMTP_USER
+ * Env:
+ *   RESEND_API_KEY   re_...  (preferred on Railway)
+ *   MAIL_FROM        verified sender, e.g. "Breadwright 3PL <alerts@dynaradigital.com>"
+ *   -- OR SMTP --
+ *   SMTP_HOST/PORT/USER/PASS  (465 SSL default; Gmail needs a 16-char App Password)
  *   MAIL_TO_DEFAULT  comma list, defaults to the two ops addresses below.
  */
+const RESEND_KEY = process.env.RESEND_API_KEY || '';
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_PORT = Number(process.env.SMTP_PORT || 465);
 const SMTP_USER = process.env.SMTP_USER || '';
@@ -29,6 +31,12 @@ function transport() {
     port: SMTP_PORT,
     secure: SMTP_PORT === 465, // 465 = implicit SSL; 587 = STARTTLS
     auth: { user: SMTP_USER, pass: SMTP_PASS },
+    // Fail fast instead of hanging a request/poll if the host is unreachable or
+    // the port is blocked (some PaaS block outbound SMTP). Distinguishes a
+    // timeout (port block) from a 535 (bad creds).
+    connectionTimeout: 12000,
+    greetingTimeout: 12000,
+    socketTimeout: 15000,
   });
   return _transport;
 }
@@ -39,15 +47,32 @@ function transport() {
  */
 async function sendMail({ to, subject, text, html }) {
   const recipients = (Array.isArray(to) && to.length ? to : DEFAULT_TO);
+
+  // 1) Resend HTTP (works on Railway — no SMTP ports needed)
+  if (RESEND_KEY) {
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: MAIL_FROM || 'onboarding@resend.dev', to: recipients, subject, text, html: html || undefined }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { console.error(`[mailer] Resend HTTP ${res.status}:`, body); return { sent: false, to: recipients, error: (body && body.message) || `HTTP ${res.status}` }; }
+      return { sent: true, to: recipients, id: body.id, via: 'resend' };
+    } catch (e) {
+      console.error('[mailer] Resend failed:', e.message);
+      return { sent: false, to: recipients, error: e.message };
+    }
+  }
+
+  // 2) SMTP fallback (blocked on Railway; fine elsewhere)
   if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
-    console.log(`[mailer] NO-OP (SMTP creds unset) — would email ${recipients.join(', ')}: "${subject}"`);
-    return { sent: false, to: recipients, skipped: 'SMTP not configured' };
+    console.log(`[mailer] NO-OP (no RESEND_API_KEY or SMTP creds) — would email ${recipients.join(', ')}: "${subject}"`);
+    return { sent: false, to: recipients, skipped: 'no email transport configured' };
   }
   try {
-    const info = await transport().sendMail({
-      from: MAIL_FROM, to: recipients.join(', '), subject, text, html: html || undefined,
-    });
-    return { sent: true, to: recipients, id: info.messageId };
+    const info = await transport().sendMail({ from: MAIL_FROM || SMTP_USER, to: recipients.join(', '), subject, text, html: html || undefined });
+    return { sent: true, to: recipients, id: info.messageId, via: 'smtp' };
   } catch (e) {
     console.error('[mailer] SMTP send failed:', e.message);
     return { sent: false, to: recipients, error: e.message };
