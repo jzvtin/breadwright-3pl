@@ -45,8 +45,28 @@ function transport() {
  * Send a plain-text (and optional HTML) email over SMTP.
  * @returns {{sent:boolean, to:string[], id?:string, skipped?:string, error?:string}}
  */
+const RELAY_URL = process.env.MAIL_RELAY_URL || ''; // e.g. https://dynaradigital.com/bw-mail.php
+const RELAY_KEY = process.env.MAIL_RELAY_KEY || '';
+
 async function sendMail({ to, subject, text, html }) {
   const recipients = (Array.isArray(to) && to.length ? to : DEFAULT_TO);
+
+  // 0) DreamHost HTTPS relay (preferred on Railway — own domain, no signup, no SMTP)
+  if (RELAY_URL && RELAY_KEY) {
+    try {
+      const res = await fetch(`${RELAY_URL}?key=${encodeURIComponent(RELAY_KEY)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Mail-Key': RELAY_KEY },
+        body: JSON.stringify({ to: recipients, subject, text, html: html || undefined, from: MAIL_FROM || 'Breadwright 3PL <no-reply@dynaradigital.com>' }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.ok === false) { console.error(`[mailer] relay HTTP ${res.status}:`, body); return { sent: false, to: recipients, error: (body && body.error) || `HTTP ${res.status}` }; }
+      return { sent: true, to: recipients, id: body.id, via: 'relay' };
+    } catch (e) {
+      console.error('[mailer] relay failed:', e.message);
+      return { sent: false, to: recipients, error: e.message };
+    }
+  }
 
   // 1) Resend HTTP (works on Railway — no SMTP ports needed)
   if (RESEND_KEY) {
