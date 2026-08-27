@@ -377,10 +377,14 @@ function resolveBuildABox(box, lineItem) {
  *   - Datex <VendorReference>: the WMS-safe set 1_DAY / 2_DAY / 3_DAY / AIR
  *     (both air tiers collapse to AIR for Datex, per Bill).
  */
+// vref = the Datex <VendorReference> value. Ice Cube's own confirmation report
+// emits granular air codes (`2_AIR`, `2_DAY`), so we emit the granular tier code
+// rather than collapsing both air tiers to a coarse `AIR`. (CONFIRM w/ Bill that
+// the Datex IMPORT accepts `1_AIR`/`2_AIR`; their EXPORT already uses `2_AIR`.)
 const SERVICE_TIERS = [
-  { match: ['next day air', 'nextday air', 'overnight air', '1_air', 'priority overnight'], tier: '1_AIR', vref: 'AIR' },
-  { match: ['2nd day air', 'second day air', 'two day air', '2 day air', '2day air', '2_air'], tier: '2_AIR', vref: 'AIR' },
-  { match: ['air'], tier: '1_AIR', vref: 'AIR' }, // bare "air" -> assume overnight
+  { match: ['next day air', 'nextday air', 'overnight air', '1_air', 'priority overnight'], tier: '1_AIR', vref: '1_AIR' },
+  { match: ['2nd day air', 'second day air', 'two day air', '2 day air', '2day air', '2_air'], tier: '2_AIR', vref: '2_AIR' },
+  { match: ['air'], tier: '1_AIR', vref: '1_AIR' }, // bare "air" -> assume overnight
   { match: ['3 day', '3day', 'three day', '3_day'], tier: '3_DAY', vref: '3_DAY' },
   { match: ['2 day', '2day', 'second day', 'two day', '2_day'], tier: '2_DAY', vref: '2_DAY' },
   { match: ['next day', 'overnight', '1 day', 'nextday', 'next_day', '1_day', 'ground'], tier: '1_DAY', vref: '1_DAY' },
@@ -395,6 +399,15 @@ const TIER_SLABS = { '1_DAY': 0, '2_DAY': 2, '3_DAY': 2, '1_AIR': 1, '2_AIR': 1 
 const SLAB_LB = 5;
 function dryIceSlabsForTier(tier) {
   return TIER_SLABS[tier] != null ? TIER_SLABS[tier] : 2; // unknown tier -> safe 2
+}
+
+// Map a service tier to the dry-ice model's service key (config/dryice.js
+// SERVICE_LEVELS) so computeDryIce applies the right transit days + UN1845 cap.
+// This drives the WEATHER-AWARE pack-sheet amount (not the flat TIER_SLABS table,
+// which returned 0 for 1_DAY/ground — a spoilage risk).
+const TIER_TO_DRYICE_SERVICE = { '1_AIR': 'overnight', '2_AIR': '2day', '2_DAY': '2day', '3_DAY': '3day', '1_DAY': 'ground' };
+function tierToDryiceService(tier) {
+  return TIER_TO_DRYICE_SERVICE[tier] || '2day';
 }
 
 // Back-compat: some code still reads SERVICE_LEVELS.
@@ -438,6 +451,7 @@ module.exports = {
   TIER_SLABS,
   SLAB_LB,
   dryIceSlabsForTier,
+  tierToDryiceService,
   DEFAULT_SERVICE_LEVEL,
   DEFAULT_SERVICE_TIER,
   resolveServiceLevel,

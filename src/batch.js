@@ -12,7 +12,7 @@
  * (switch here if Bill's import wants individual files).
  */
 const { normalizeOrder, fetchOrdersForBatch, tagOrderSent } = require('./shopify');
-const { buildBatchChunks, buildCustomerOrder } = require('./xml/buildOrder');
+const { buildBatchChunks, buildCustomerOrder, buildOrderNode } = require('./xml/buildOrder');
 const { putXml, DRY_RUN } = require('./sftp');
 
 /** YYYYMMDDHHMMSS from a Date (passed in for testable/stable output). */
@@ -42,12 +42,29 @@ function batchFilename(now, part) {
  */
 async function runBatch({ now = new Date(), windowHours = 25, rawOrders = null, tag = true } = {}) {
   const raws = rawOrders || (await fetchOrdersForBatch({ windowHours, now }));
-  const orders = raws.map((o) => normalizeOrder(o, now));
+  const allOrders = raws.map((o) => normalizeOrder(o, now));
   const mode = process.env.BATCH_MODE === 'per-order' ? 'per-order' : 'combined';
-  const summary = { count: orders.length, mode, dryRun: DRY_RUN, files: [], warnings: [], tagged: [], tagErrors: [] };
+
+  // SCREEN OUT BLOCKED ORDERS before building the file. A blocked order
+  // (Entertainer box, null-Datex-code add-on like EVOO/butter, bad build-a-box)
+  // must NEVER be SFTP'd to Ice Cube — same "don't send bad data" gate the
+  // review queue enforces. Blocked orders are reported and left UN-tagged so they
+  // resurface next run once a human fixes them.
+  const orders = [];
+  const sendRaws = [];
+  const blocked = [];
+  allOrders.forEach((order, i) => {
+    let b = [];
+    try { b = buildOrderNode(order).blocking || []; } catch (e) { b = ['build error: ' + e.message]; }
+    if (b.length) blocked.push({ number: order.number, reasons: b });
+    else { orders.push(order); sendRaws.push(raws[i]); }
+  });
+
+  const summary = { count: allOrders.length, sendable: orders.length, mode, dryRun: DRY_RUN, files: [], warnings: [], blocked, tagged: [], tagErrors: [] };
+  blocked.forEach((x) => { summary.warnings.push(`#${x.number}: BLOCKED, not sent — ${x.reasons.join('; ')}`); console.warn(`[batch] #${x.number} BLOCKED, skipped: ${x.reasons.join('; ')}`); });
 
   if (!orders.length) {
-    console.log('[batch] no new paid orders in the window — nothing to send');
+    console.log(`[batch] no sendable orders (${allOrders.length} in window, ${blocked.length} blocked) — nothing to send`);
     return summary;
   }
 
@@ -73,7 +90,7 @@ async function runBatch({ now = new Date(), windowHours = 25, rawOrders = null, 
   // Persistent idempotency: tag each order in Shopify so the next batch skips it.
   // Only after a real drop — dry-run leaves orders untagged so you can re-test.
   if (tag && !DRY_RUN) {
-    for (const o of raws) {
+    for (const o of sendRaws) {
       try {
         await tagOrderSent(o.id);
         summary.tagged.push(o.id);

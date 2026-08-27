@@ -98,7 +98,10 @@ function buildOrderNode(order, opts = {}) {
     //     caller has already resolved live conditions (weather + calendar-aware
     //     transit via resolveDryIceConditions), it passes them on
     //     order.dryIceConditions; otherwise fall back to the sync estimate.
-    dryIce = order.dryIceConditions || computeDryIce({ zip });
+    // Service key drives the per-service UN1845 cap (overnight=1 slab, 2-day air=2)
+    // and transit days. We do NOT pin mode=air, because the blunt air cap would
+    // wrongly clamp 2nd-Day-Air to 1 slab; the service cap is the correct ceiling.
+    dryIce = order.dryIceConditions || computeDryIce({ zip, service: cfg.tierToDryiceService(order.serviceTier) });
     if (!dryIce.zoneKnown) {
       warnings.push(
         `Dry ice: destination ZIP ${zip || '(none)'} not in the zone table — assumed Zone ${dryIce.zone} (${dryIce.blocks} block${dryIce.blocks > 1 ? 's' : ''}). CONFIRM.`
@@ -153,17 +156,18 @@ function buildOrderNode(order, opts = {}) {
   const CASE = cfg.CASE_PACK || {};
   const contents = breadLines.map((b) => ({ code: b.code, qty: b.qty, desc: (CASE[b.code] || {}).desc || b.code }));
   const gelPacks = materialsOnly ? 0 : (PACKAGING.find((p) => p.code === 'BW_GELPK') || {}).qty || 0;
-  // Dry ice is DETERMINISTIC by service tier (Justin 2026-08-18), not the weather
-  // estimate: 1_DAY=0, 2_DAY=2, 1_AIR/2_AIR=1 (5 lb slabs). The dryIce object is
-  // still kept for carrier/mode/notes on the pack sheet.
-  const dryIceSlabs = materialsOnly ? 0 : cfg.dryIceSlabsForTier(order.serviceTier);
+  // Dry ice = the WEATHER + transit + UN1845-cap model (config/dryice.js), NOT a
+  // flat tier table. computeDryIce always returns >=1 block, so a ground/1_DAY
+  // order can no longer show 0 slabs (the spoilage-risk bug). Falls back to the
+  // tier table only if the model somehow didn't populate blocks.
+  const dryIceSlabs = materialsOnly ? 0 : (dryIce && dryIce.blocks != null ? dryIce.blocks : cfg.dryIceSlabsForTier(order.serviceTier));
   const pack = {
     orderNumber: shipCode,
     materialsOnly,
     serviceTier: order.serviceTier || null, //  1_DAY/2_DAY/3_DAY/1_AIR/2_AIR
     serviceLevel: order.serviceLevel || null, // Datex VendorReference
-    dryIceSlabs, //             count of 5 lb slabs (tier-driven)
-    dryIceLb: dryIceSlabs * cfg.SLAB_LB, // total dry-ice weight
+    dryIceSlabs, //             count of 5 lb slabs (weather + transit + UN1845 model)
+    dryIceLb: (dryIce && dryIce.lbs != null ? dryIce.lbs : dryIceSlabs * cfg.SLAB_LB), // total dry-ice weight
     gelPackOz: 24, //           each gel pack weight (Manifest §00); qty 2 every order
     loafUnits: breadUnits,
     contents,
@@ -174,7 +178,9 @@ function buildOrderNode(order, opts = {}) {
     dryIce,
     carrier: (dryIce && dryIce.carrier) || order.carrier || null,
     shipMode: (dryIce && dryIce.mode) || null, //          'ground' | 'air'
-    declareDryIce: !!(dryIce && dryIce.declareDryIce), //  air => packer checks the dry-ice button
+    // air => packer checks the dry-ice button. True if the model flagged it OR the
+    // service tier is air (near-zone air orders resolve mode=ground in the model).
+    declareDryIce: !!(dryIce && dryIce.declareDryIce) || /_AIR$/.test(order.serviceTier || ''),
     welcomeBooklet: !materialsOnly && !!order.isFirstOrder,
     insert: !materialsOnly, //  BW_INFOSHEET ships on every order now
     blocking, //  reasons the order must NOT be sent (empty => clean)
