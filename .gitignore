@@ -5,3 +5,8 @@ out/.sent/
 *.log
 # Contains PEEK_KEY + dashboard password — deployed to dynaradigital, never commit (repo is public)
 deploy/breadwright-status.php
+# Live-pulled console copy (has PEEK_KEY) + SFTP helper — never commit (repo is public)
+deploy/bw-index-live.php
+
+# mail relay holds a shared secret — never commit
+deploy/bw-mail.php
