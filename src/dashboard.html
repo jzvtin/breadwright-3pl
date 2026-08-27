@@ -476,7 +476,7 @@ async function readConfirm(btn){
   let h='<div style="margin-bottom:6px"><b>'+d.count+' order(s) shipped</b>'+(d.flagged&&d.flagged.length?' · <span style="color:#a15a1a">⚠ check: '+d.flagged.join(', ')+'</span>':'')+'</div>';
   h+='<pre style="white-space:pre-wrap;font:12px monospace;margin:0;background:#fffaf0;border:1px solid #ece0c8;border-radius:8px;padding:10px">'+esc(d.report||'')+'</pre>';
   const em=d.email||{};
-  h+='<div class="muted" style="margin-top:8px;font-size:12px">'+(em.sent?'✉ emailed '+((em.to||[]).join(', ')):(em.skipped?'✉ email OFF ('+esc(em.skipped)+') — set RESEND_API_KEY to enable':'✉ '+esc(em.error||'not sent')))+'</div>';
+  h+='<div class="muted" style="margin-top:8px;font-size:12px">'+(em.sent?'✉ emailed '+((em.to||[]).join(', ')):(em.skipped?'✉ email OFF ('+esc(em.skipped)+') — set SMTP creds to enable':'✉ '+esc(em.error||'not sent')))+'</div>';
   okBox(box,h);
  }catch(e){errBox(box,e.message);}finally{btn.disabled=false;}
 }

@@ -14,9 +14,12 @@
     "check": "node sftp-check.js",
     "send:test": "node send-test-order.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "express": "^4.19.2",
+    "nodemailer": "^9.0.5",
     "ssh2-sftp-client": "^11.0.0"
   }
 }
