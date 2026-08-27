@@ -473,7 +473,9 @@ async function readConfirm(btn){
   const r=await fetch('?action=confirmfile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const d=await r.json();
   if(!r.ok||d.ok===false||d.error){errBox(box,d.error||('HTTP '+r.status));return;}
+  window._lastConfirmXml=body.xml; window._lastConfirmName=body.fileName||'';
   let h='<div style="margin-bottom:6px"><b>'+d.count+' order(s) shipped</b>'+(d.flagged&&d.flagged.length?' · <span style="color:#a15a1a">⚠ check: '+d.flagged.join(', ')+'</span>':'')+'</div>';
+  h+='<div style="margin:2px 0 10px"><button onclick="makeConfirmDoc(this)" style="background:#7a5c34;color:#fff;border:0;padding:9px 16px;border-radius:8px;font-weight:700;cursor:pointer">📄 Generate confirmation doc (PDF)</button> <span class="muted" style="font-size:12px">— branded reconciliation, opens in new tab</span></div>';
   h+='<pre style="white-space:pre-wrap;font:12px monospace;margin:0;background:#fffaf0;border:1px solid #ece0c8;border-radius:8px;padding:10px">'+esc(d.report||'')+'</pre>';
   const em=d.email||{};
   h+='<div class="muted" style="margin-top:8px;font-size:12px">'+(em.sent?'✉ emailed '+((em.to||[]).join(', ')):(em.skipped?'✉ email OFF ('+esc(em.skipped)+') — set SMTP creds to enable':'✉ '+esc(em.error||'not sent')))+'</div>';
@@ -481,6 +483,18 @@ async function readConfirm(btn){
  }catch(e){errBox(box,e.message);}finally{btn.disabled=false;}
 }
 
+async function makeConfirmDoc(btn){
+ if(!window._lastConfirmXml){alert('Read a confirmation file first.');return;}
+ btn.disabled=true;const old=btn.textContent;btn.textContent='Generating…';
+ try{
+  const r=await fetch('?action=confirmdoc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({xml:window._lastConfirmXml,fileName:window._lastConfirmName})});
+  if(!r.ok){const e=await r.json().catch(()=>({}));alert('Failed: '+(e.error||('HTTP '+r.status)));return;}
+  const html=await r.text();
+  const w=window.open('','_blank');
+  if(w){w.document.open();w.document.write(html);w.document.close();}
+  else{const blob=new Blob([html],{type:'text/html'});location.href=URL.createObjectURL(blob);}
+ }catch(e){alert('Error: '+e.message);}finally{btn.disabled=false;btn.textContent=old;}
+}
 function val(id){const el=document.getElementById(id);return el?el.value.trim():'';}
 function workBox(b,m){b.style.background='#faf4e8';b.style.border='1px solid #d8c3a4';b.style.color='#5a4a2c';b.innerHTML=esc(m);}
 function okBox(b,h){b.style.background='#eaf6ea';b.style.border='1px solid #bfe0c4';b.style.color='#2c2418';b.innerHTML=h;}

@@ -61,6 +61,7 @@ async function handleAction(req, res) {
     else if (action === 'confirm') out = await proxy('POST', '/peek/ship-confirm', req.body || {});
     else if (action === 'rate') out = await proxy('POST', '/peek/priority-rate', req.body || {});
     else if (action === 'confirmfile') out = await proxy('POST', '/peek/confirm-file', req.body || {});
+    else if (action === 'confirmdoc') out = await proxy('POST', '/peek/confirm-doc', req.body || {});
     else { res.status(400).json({ error: 'bad action' }); return true; }
     res.status(out.code).type(out.ctype).send(out.text);
   } catch (e) {

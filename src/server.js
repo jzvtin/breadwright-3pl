@@ -505,6 +505,100 @@ app.post('/peek/confirm-file', async (req, res) => {
   }
 });
 
+// Build the branded Shipment Confirmation reconciliation doc (HTML, print/PDF-ready)
+// from a posted confirmation XML: parse shipped contents, enrich each order from
+// Shopify (destination + tracking + expected build + box name), reconcile
+// Match/Variance, render. ?format=json returns the structured rows instead of HTML.
+//   POST /peek/confirm-doc?key=..  body { xml, fileName? }
+app.post('/peek/confirm-doc', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  const b = req.body || {};
+  const xml = b.xml || b.content || '';
+  if (!xml || !String(xml).includes('table1_Details_Group')) {
+    return res.status(400).json({ error: 'body.xml must be the Datex completed-shipments XML' });
+  }
+  try {
+    const conf = require('./confirmations');
+    const { renderConfirmDoc, contentsLine } = require('./confirmDoc');
+    const BREAD = new Set(['BW_CSD', 'BW_MGP', 'BW_CRANPEC', 'BW_PFRAN', 'BW_DB2PK', 'BW_SEEDSD']);
+
+    // shipped bread map per order, straight from the confirmation rows
+    const rows = conf.parseCompletedShipments(xml);
+    const shippedByOrder = {};
+    const svcByOrder = {};
+    for (const r of rows) {
+      svcByOrder[r.order] = r.service || svcByOrder[r.order];
+      if (BREAD.has(r.code)) (shippedByOrder[r.order] = shippedByOrder[r.order] || {})[r.code] = (shippedByOrder[r.order][r.code] || 0) + r.qty;
+    }
+    const numbers = Object.keys(shippedByOrder).sort((a, z) => Number(a) - Number(z));
+
+    const docRows = [];
+    for (const n of numbers) {
+      const shipped = shippedByOrder[n];
+      const unitsShipped = Object.values(shipped).reduce((s, q) => s + q, 0);
+      let dest = '', tracking = '', boxName = null, expected = null, blocked = null;
+      try {
+        const raw = await fetchOrderRawByNumber(n);
+        if (raw) {
+          const order = normalizeOrder(raw);
+          dest = [order.shipping.city, order.shipping.state].filter(Boolean).join(', ');
+          tracking = ((raw.fulfillments || []).map((f) => f.tracking_number).filter(Boolean))[0] || '';
+          const boxLine = (raw.line_items || []).find((li) => /box/i.test(li.title || ''));
+          if (boxLine) boxName = boxLine.title;
+          try {
+            const built = buildCustomerOrder(order);
+            expected = {};
+            (built.pack.contents || []).forEach((c) => { if (BREAD.has(c.code)) expected[c.code] = (expected[c.code] || 0) + c.qty; });
+          } catch (e) { blocked = e.message; }
+        }
+      } catch (e) { blocked = e.message; }
+
+      // reconcile shipped vs expected
+      let status = 'Match', variances = [], unitsMatched = unitsShipped;
+      if (expected) {
+        const codes = new Set([...Object.keys(expected), ...Object.keys(shipped)]);
+        for (const c of codes) {
+          if ((expected[c] || 0) !== (shipped[c] || 0)) variances.push(`${c}: ordered ${expected[c] || 0} / shipped ${shipped[c] || 0}`);
+        }
+        if (variances.length) { status = 'Variance'; unitsMatched = unitsShipped - variances.length; }
+      } else {
+        status = 'Shipped'; // couldn't pull the order to reconcile — report as shipped, unverified
+      }
+      docRows.push({ order: '#' + n, service: svcByOrder[n] || '', dest, tracking, boxName, contents: contentsLine(shipped), status, variances, unitsShipped, unitsMatched });
+    }
+
+    const fileDate = (String(b.fileName || '').match(/(\d{2,4})-?(\d{2})-?(\d{2})/) || []);
+    const ymd = fileDate.length ? `20${String(fileDate[1]).slice(-2)}-${fileDate[2]}-${fileDate[3]}` : new Date().toISOString().slice(0, 10);
+    const issued = new Date(ymd + 'T12:00:00Z').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
+    const doc = {
+      ref: `BW-SC-${ymd}`,
+      fileName: b.fileName || '(pasted)',
+      issued,
+      orderRange: numbers.length ? `#${numbers[0]}–#${numbers[numbers.length - 1]}` : '—',
+      standardPack: '1 × BW_BOX14, 2 × BW_GELPK, 1 × BW_GCF1, 1 × BW_GCF2',
+      rows: docRows,
+    };
+    if (req.query.format === 'json') return res.json({ ok: true, doc });
+    res.type('html').send(renderConfirmDoc(doc));
+  } catch (e) {
+    console.error('[confirm-doc] FAILED:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Manually run the confirmation-folder scan now (dashboard button / testing).
+// ?force=1 re-processes files already seen this session AND may email them.
+app.post('/peek/poll-now', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const out = await require('./confirmPoller').runOnce({ force: req.query.force === '1' });
+    res.json({ ok: true, dir: require('./confirmPoller').RETURN_DIR, ...out });
+  } catch (e) {
+    console.error('[poll-now] FAILED:', e);
+    res.status(502).json({ error: e.message });
+  }
+});
+
 // Trigger the end-of-day batch on demand (dashboard button or external cron
 // hitting this URL). Key-gated; the key stays server-side in the dashboard proxy.
 app.post('/batch/run', async (req, res) => {
@@ -725,4 +819,5 @@ registerDashboard(app);
 
 app.listen(PORT, () => {
   console.log(`Breadwright 3PL service on :${PORT} (DRY_RUN=${DRY_RUN ? 'on' : 'off'})`);
+  require('./confirmPoller').start(); // 5-min SFTP return-folder watcher (gated by POLL_CONFIRMATIONS=1)
 });
