@@ -21,6 +21,7 @@ const { putXml, peekList, peekFile, sendToTest, DRY_RUN } = require('./sftp');
 const { registerDashboard } = require('./dashboard');
 const { runBatch } = require('./batch');
 const { buildOrdersCsv } = require('./ordersCsv');
+const priority = require('./priorityshippers');
 
 // Named Breadwright example orders the dashboard can fire as a live test.
 const TEST_FIXTURES = {
@@ -410,6 +411,58 @@ app.post('/peek/dryice', async (req, res) => {
   } catch (e) {
     console.error('[dryice] FAILED:', e);
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Priority Shippers (Yahuda) live rate compare — the CHEAPEST-lane picker that
+// replaces ShipStation. Read-only: calls get-rates only (no label bought). Works
+// from a MANUAL address+weight (like /peek/dryice), so it is NOT blocked by the
+// Shopify token. Optionally pass ?number= to auto-fill from a Shopify order once
+// the token is valid.
+//   POST /peek/priority-rate?key=..  body {to:{...}|zip, weightLb, dims, shipDate, dryIceLb, deadline}
+app.post('/peek/priority-rate', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  const b = req.body || {};
+  try {
+    // Accept either a full `to` object or loose fields (zip-only is enough to rate).
+    const to = b.to || {
+      address_1: b.address_1 || b.address || '',
+      city: b.city || '',
+      state: b.state || '',
+      zip: b.zip || '',
+      country: b.country || 'US',
+      residential: b.residential !== false, // Breadwright ships DTC -> residential default
+      name: b.name || 'Customer',
+    };
+    if (!to.zip) return res.status(400).json({ error: 'zip (or to.zip) required' });
+
+    const w = Number(b.weightLb || b.weight || 8);
+    const pkg = { weight: w > 0 ? w : 8 };
+    if (b.length) pkg.length = Number(b.length);
+    if (b.width) pkg.width = Number(b.width);
+    if (b.height) pkg.height = Number(b.height);
+
+    const r = await priority.getRates({
+      to,
+      packages: [pkg],
+      ship_date: b.shipDate || undefined,
+      dryIceLb: b.dryIceLb ? Number(b.dryIceLb) : 0,
+    });
+    if (!r.ok) return res.status(r.fail && r.fail.http === 401 ? 401 : 422).json({ ok: false, ...r.fail, carrier_errors: r.errors });
+
+    const pick = priority.cheapestByDeadline(r.rates, b.deadline || null);
+    res.json({
+      ok: true,
+      to: { zip: to.zip, city: to.city, state: to.state },
+      cheapest_overall: r.rates[0] || null,
+      pick_for_deadline: b.deadline ? pick : null,
+      deadline: b.deadline || null,
+      rates: r.rates,
+      carrier_errors: r.errors,
+    });
+  } catch (e) {
+    console.error('[priority-rate] FAILED:', e);
+    res.status(502).json({ error: e.message });
   }
 });
 
