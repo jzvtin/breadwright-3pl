@@ -59,6 +59,8 @@ async function handleAction(req, res) {
     else if (action === 'send') out = await proxy('POST', `/peek/send-test?fixture=${encodeURIComponent(req.query.fixture || 'founders-box')}`);
     else if (action === 'generate') out = await proxy('POST', `/peek/generate${req.query.send === '1' ? '?send=1' : ''}`, req.body || {});
     else if (action === 'confirm') out = await proxy('POST', '/peek/ship-confirm', req.body || {});
+    else if (action === 'rate') out = await proxy('POST', '/peek/priority-rate', req.body || {});
+    else if (action === 'confirmfile') out = await proxy('POST', '/peek/confirm-file', req.body || {});
     else { res.status(400).json({ error: 'bad action' }); return true; }
     res.status(out.code).type(out.ctype).send(out.text);
   } catch (e) {

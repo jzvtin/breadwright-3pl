@@ -185,6 +185,42 @@
   <div id="cfresult" style="margin-top:14px;display:none;border-radius:10px;padding:12px 14px;font-size:13px"></div>
  </div>
 
+ <!-- ============ RATE COMPARE (Priority Shippers overnight) ============ -->
+ <h2 class="sec">🚚 Rate compare — cheapest lane</h2>
+ <div class="send">
+  <h3>Live UPS rates via Priority Shippers</h3>
+  <p><b>Overnight/air lane.</b> Enter the ship-to + package weight → live UPS rates, cheapest first. Set a
+     delivery deadline and it flags the cheapest service that still arrives in time. <b>Quotes only — buys nothing.</b>
+     Ground/2-day still print through ShipStation.</p>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+   <label style="font-size:12px;color:#6b5f47">Street<br><input id="rt_addr" value="350 5th Ave" style="padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit;width:200px"></label>
+   <label style="font-size:12px;color:#6b5f47">City<br><input id="rt_city" value="New York" style="padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit;width:140px"></label>
+   <label style="font-size:12px;color:#6b5f47">State<br><input id="rt_state" value="NY" maxlength="2" style="padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit;width:60px"></label>
+   <label style="font-size:12px;color:#6b5f47">ZIP<br><input id="rt_zip" value="10118" style="padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit;width:90px"></label>
+   <label style="font-size:12px;color:#6b5f47">Weight (lb)<br><input id="rt_wt" type="number" value="8" min="1" style="padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit;width:90px"></label>
+   <label style="font-size:12px;color:#6b5f47">Ship date<br><input id="rt_ship" type="date" style="padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit"></label>
+   <label style="font-size:12px;color:#6b5f47">Deliver by<br><input id="rt_dl" type="date" style="padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit"></label>
+   <button onclick="getRates(this)" style="padding:9px 16px">Get rates</button>
+  </div>
+  <div id="rtresult" style="margin-top:14px;display:none;border-radius:10px;padding:12px 14px;font-size:13px"></div>
+ </div>
+
+ <!-- ============ CONFIRMATION FILE READER ============ -->
+ <h2 class="sec">📋 Confirmation reader — what actually shipped</h2>
+ <div class="send">
+  <h3>Paste Ice Cube's completed-shipments file</h3>
+  <p>Paste the <code>BWCompletedShipments_*.xml</code> Ice Cube sends back. It turns the raw material rows into
+     plain English — <b>“order #1038 shipped its 6 loaves + packaging”</b> — instead of eyeballing 16 rows.
+     On read it <b>emails muhammad@breadwrightbox.com + j@dynaradigital.com</b> so we know to check it.</p>
+  <textarea id="cff_xml" placeholder="&lt;table1_Details_Group shipmentLookupCode=&quot;1038&quot; materialLookupCode=&quot;BW_CSD&quot; QuantityShipped=&quot;1&quot; .../&gt; …" style="width:100%;min-height:120px;padding:10px;border:1px solid #d8c3a4;border-radius:8px;font:12px monospace;box-sizing:border-box"></textarea>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px">
+   <label style="font-size:12px;color:#6b5f47">File name (optional)<input id="cff_name" placeholder="BWCompletedShipments_2026-08-26.xml" style="margin-left:6px;padding:9px 11px;border:1px solid #d8c3a4;border-radius:8px;font:inherit;width:280px"></label>
+   <label style="font-size:12.5px;color:#6b5f47;display:flex;align-items:center;gap:5px"><input type="checkbox" id="cff_notify" checked> email the team</label>
+   <button onclick="readConfirm(this)" style="padding:9px 16px">Read file</button>
+  </div>
+  <div id="cffresult" style="margin-top:14px;display:none;border-radius:10px;padding:12px 14px;font-size:13px"></div>
+ </div>
+
  <!-- ============ WHAT GETS BUILT ============ -->
  <h2 class="sec">What each order contains</h2>
  <div class="grid2">
@@ -400,6 +436,55 @@ async function confirmShip(btn){
 }
 function closeV(){document.getElementById('overlay').style.display='none';}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeV();});
+
+// ---- 🚚 Rate compare (Priority Shippers overnight) --------------------------
+async function getRates(btn){
+ const box=document.getElementById('rtresult');box.style.display='block';
+ const body={address_1:val('rt_addr'),city:val('rt_city'),state:val('rt_state'),zip:val('rt_zip'),weightLb:Number(val('rt_wt'))||8};
+ const sd=val('rt_ship'), dl=val('rt_dl');
+ if(sd)body.shipDate=sd; if(dl)body.deadline=dl;
+ if(!body.zip){errBox(box,'ZIP required.');return;}
+ workBox(box,'Getting live rates…');btn.disabled=true;
+ try{
+  const r=await fetch('?action=rate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  if(!r.ok||d.ok===false){errBox(box,(d.message||d.error||('HTTP '+r.status))+(d.carrier_errors&&d.carrier_errors.length?' — '+d.carrier_errors.join('; '):''));return;}
+  const rates=d.rates||[];
+  if(!rates.length){errBox(box,'No rates returned.'+(d.carrier_errors&&d.carrier_errors.length?' '+d.carrier_errors.join('; '):''));return;}
+  const pk=d.pick_for_deadline, ch=d.cheapest_overall;
+  let h='';
+  if(pk)h+='<div style="margin-bottom:8px">🎯 <b>Meets '+esc(d.deadline)+':</b> '+esc(pk.service)+' — <b>$'+pk.total.toFixed(2)+'</b> <span class="muted">(ETA '+esc((pk.eta||'').slice(0,10))+')</span></div>';
+  else if(dl)h+='<div style="margin-bottom:8px;color:#a15a1a">⚠ No service meets '+esc(d.deadline)+' — cheapest below.</div>';
+  h+='<table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr><th style="text-align:left;padding:4px 8px">Service</th><th style="text-align:left;padding:4px 8px">ETA</th><th style="text-align:right;padding:4px 8px">Total</th></tr>';
+  rates.forEach(x=>{const win=ch&&x.service===ch.service&&x.total===ch.total;h+='<tr style="border-top:1px solid #ece0c8'+(win?';font-weight:700':'')+'"><td style="padding:4px 8px">'+esc(x.service)+(win?' <span class="badge">cheapest</span>':'')+'</td><td style="padding:4px 8px">'+esc((x.eta||'').slice(0,10)||'—')+'</td><td style="padding:4px 8px;text-align:right">$'+x.total.toFixed(2)+'</td></tr>';});
+  h+='</table>';
+  okBox(box,h);
+ }catch(e){errBox(box,e.message);}finally{btn.disabled=false;}
+}
+
+// ---- 📋 Confirmation reader -------------------------------------------------
+async function readConfirm(btn){
+ const box=document.getElementById('cffresult');box.style.display='block';
+ const xml=val('cff_xml');
+ if(!xml){errBox(box,'Paste the confirmation XML first.');return;}
+ const body={xml,fileName:val('cff_name'),notify:document.getElementById('cff_notify').checked};
+ workBox(box,'Reading…');btn.disabled=true;
+ try{
+  const r=await fetch('?action=confirmfile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  if(!r.ok||d.ok===false||d.error){errBox(box,d.error||('HTTP '+r.status));return;}
+  let h='<div style="margin-bottom:6px"><b>'+d.count+' order(s) shipped</b>'+(d.flagged&&d.flagged.length?' · <span style="color:#a15a1a">⚠ check: '+d.flagged.join(', ')+'</span>':'')+'</div>';
+  h+='<pre style="white-space:pre-wrap;font:12px monospace;margin:0;background:#fffaf0;border:1px solid #ece0c8;border-radius:8px;padding:10px">'+esc(d.report||'')+'</pre>';
+  const em=d.email||{};
+  h+='<div class="muted" style="margin-top:8px;font-size:12px">'+(em.sent?'✉ emailed '+((em.to||[]).join(', ')):(em.skipped?'✉ email OFF ('+esc(em.skipped)+') — set RESEND_API_KEY to enable':'✉ '+esc(em.error||'not sent')))+'</div>';
+  okBox(box,h);
+ }catch(e){errBox(box,e.message);}finally{btn.disabled=false;}
+}
+
+function val(id){const el=document.getElementById(id);return el?el.value.trim():'';}
+function workBox(b,m){b.style.background='#faf4e8';b.style.border='1px solid #d8c3a4';b.style.color='#5a4a2c';b.innerHTML=esc(m);}
+function okBox(b,h){b.style.background='#eaf6ea';b.style.border='1px solid #bfe0c4';b.style.color='#2c2418';b.innerHTML=h;}
+function errBox(b,m){b.style.display='block';b.style.background='#f6e3e3';b.style.border='1px solid #e2b8b8';b.style.color='#a12b2b';b.innerHTML='✕ '+esc(m);}
 const G_PRODUCTS=[
  ['the-breadwright-founders-box','BW-BOX-01',"Founder's Box (7 loaves — Seeded Sourdough ×2)"],
  ['country-sourdough','',"Country Sourdough"],

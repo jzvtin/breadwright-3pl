@@ -466,6 +466,45 @@ app.post('/peek/priority-rate', async (req, res) => {
   }
 });
 
+// Ingest Ice Cube's "completed shipments" confirmation file (BWCompletedShipments_*.xml):
+// parse -> plain-English summary (no more eyeballing 16 material rows for a 6-loaf order)
+// -> email the ops team so they know it landed and can eyeball it. Read-only re: Shopify.
+//   POST /peek/confirm-file?key=..  body { xml:"<...>", fileName?, notify?:true }
+app.post('/peek/confirm-file', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  const b = req.body || {};
+  const xml = b.xml || b.content || '';
+  if (!xml || !String(xml).includes('table1_Details_Group')) {
+    return res.status(400).json({ error: 'body.xml must be the Datex completed-shipments XML (no <table1_Details_Group> rows found)' });
+  }
+  try {
+    const conf = require('./confirmations');
+    const { sendMail } = require('./mailer');
+    const rows = conf.parseCompletedShipments(xml);
+    const summary = conf.summarize(rows);
+    const fileDate = (String(b.fileName || '').match(/(\d{4}-?\d{2}-?\d{2})/) || [])[1] || null;
+    const text = conf.plainText(summary, { fileDate });
+    const flagged = summary.orders.filter((o) => o.unknown);
+
+    let email = { sent: false };
+    if (b.notify !== false) {
+      const subject = `Ice Cube shipped ${summary.count} order(s)${flagged.length ? ` — ${flagged.length} to check` : ''}`;
+      email = await sendMail({ subject, text });
+    }
+    res.json({
+      ok: true,
+      count: summary.count,
+      orders: summary.orders,
+      report: text,
+      flagged: flagged.map((o) => o.order),
+      email,
+    });
+  } catch (e) {
+    console.error('[confirm-file] FAILED:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Trigger the end-of-day batch on demand (dashboard button or external cron
 // hitting this URL). Key-gated; the key stays server-side in the dashboard proxy.
 app.post('/batch/run', async (req, res) => {
