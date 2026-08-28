@@ -410,6 +410,56 @@ function tierToDryiceService(tier) {
   return TIER_TO_DRYICE_SERVICE[tier] || '2day';
 }
 
+// ---------------------------------------------------------------------------
+// AUTHORITATIVE ship-lane + dry-ice rule (Justin, 2026-08-28, from the real
+// #1034-1037 shipments). SUPERSEDES the weather model + TIER_SLABS for the
+// slab count and the queue lane. The tag suffix decides carrier + mode:
+//   *_AIR (1_AIR / 2_AIR / bare AIR) -> UPS Air via PRIORITY SHIPPERS, always 1 slab.
+//   *_DAY (1_DAY / 2_DAY / 3_DAY)    -> UPS GROUND via ShipStation, dry ice BY ZONE.
+// Ground dry ice by UPS zone FROM Fall River MA (zone-zips.csv):
+//   near (MA/NY/CT/RI/NH/NJ/VT/ME, zone <=3) = 0 slabs (gel packs only)
+//   mid  (zone 4-5)                            = 1 slab
+//   far  (zone >=6, west)                      = 2 slabs
+// ---------------------------------------------------------------------------
+const isAirTier = (tier) => /(_AIR)$|^AIR$/.test(String(tier || '').toUpperCase());
+
+function groundSlabsByZone(zone) {
+  if (zone == null) return null; // caller falls back to the zip-prefix heuristic
+  if (zone <= 3) return 0;       // near Fall River
+  if (zone <= 5) return 1;       // mid
+  return 2;                      // far / west
+}
+
+// Fallback when the zip isn't in the (East-Coast-only) zone table: approximate
+// UPS ground distance from Fall River by the zip's first digit.
+//   0/1/2 (New England, NY, mid-Atlantic) = near  -> 0
+//   3/4/5/6 (Southeast, Midwest)           = mid   -> 1
+//   7/8/9 (South-central, Mountain, West)  = far   -> 2
+function groundSlabsByZip(zip) {
+  const d = String(zip || '').replace(/\D/g, '')[0];
+  if (d == null) return 1;             // no zip -> safe middle
+  if (d <= '2') return 0;
+  if (d <= '6') return 1;
+  return 2;
+}
+
+/** Slabs (5 lb each) for an order. Air = 1 flat; ground = by zone, then zip fallback. */
+function dryIceSlabs(tier, zone, zip) {
+  if (isAirTier(tier)) return 1;
+  const byZone = groundSlabsByZone(zone);
+  return byZone != null ? byZone : groundSlabsByZip(zip);
+}
+
+/** Queue/label lane for a tier. Air -> Priority Shippers; ground -> ShipStation UPS Ground. */
+function laneFor(tier) {
+  const t = String(tier || '').toUpperCase();
+  if (isAirTier(t)) {
+    const service = /^1_AIR$|^AIR$/.test(t) ? 'UPS Next Day Air' : 'UPS 2nd Day Air';
+    return { source: 'priority_shippers', service, mode: 'air' };
+  }
+  return { source: 'shipstation', service: 'UPS Ground', mode: 'ground' };
+}
+
 // Back-compat: some code still reads SERVICE_LEVELS.
 const SERVICE_LEVELS = SERVICE_TIERS.map((t) => ({ match: t.match, value: t.vref }));
 
@@ -452,6 +502,11 @@ module.exports = {
   SLAB_LB,
   dryIceSlabsForTier,
   tierToDryiceService,
+  isAirTier,
+  groundSlabsByZone,
+  groundSlabsByZip,
+  dryIceSlabs,
+  laneFor,
   DEFAULT_SERVICE_LEVEL,
   DEFAULT_SERVICE_TIER,
   resolveServiceLevel,

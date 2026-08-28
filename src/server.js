@@ -815,12 +815,10 @@ app.get('/peek/carriers', async (reqE, res) => {
 //   2_DAY / 2_AIR                         -> ShipStation,       UPS 2nd Day Air
 //   3_DAY / ground / other                -> ShipStation,       UPS Ground
 // ---------------------------------------------------------------------------
+// Authoritative lane rule lives in config/materials.js (laneFor): any *_AIR ->
+// Priority Shippers (UPS Air); *_DAY -> ShipStation (UPS Ground).
 function routeLane(serviceTier) {
-  const t = String(serviceTier || '').toUpperCase();
-  if (/^(1_DAY|1_AIR|AIR|OVERNIGHT|NEXT)/.test(t)) return { source: 'priority_shippers', service: 'UPS Next Day Air', mode: 'air' };
-  if (/^(2_DAY|2_AIR)/.test(t)) return { source: 'shipstation', service: 'UPS 2nd Day Air', mode: '2day' };
-  if (/^(3_DAY|GROUND)/.test(t)) return { source: 'shipstation', service: 'UPS Ground', mode: 'ground' };
-  return { source: 'shipstation', service: 'UPS 2nd Day Air', mode: '2day' }; // safe default
+  return require('../config/materials').laneFor(serviceTier);
 }
 
 // Rough shippable weight (lb) from the pack = loaves + packaging + dry ice.
