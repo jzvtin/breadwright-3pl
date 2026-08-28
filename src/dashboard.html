@@ -604,15 +604,13 @@ async function loadStats(){
   const tiles=ice?[
    kpiTile('To ship',d.toShip,'awaiting label'),
    kpiTile('Shipped',d.shipped,'fulfilled'),
-   kpiTile('Orders',d.count,'last '+d.days+'d'),
-   kpiTile('Dry ice',d.dryIceSlabs+' slabs','~'+d.avgWeightLb+'# avg box')
+   kpiTile('Orders',d.count,'last '+d.days+'d')
   ]:[
    kpiTile('Orders',d.count,null),
    kpiTile('Revenue',money(d.revenue),null),
    kpiTile('Avg order',money(d.aov),null),
    kpiTile('To ship',d.toShip,'awaiting label'),
-   kpiTile('Shipped',d.shipped,'fulfilled'),
-   kpiTile('Dry ice',d.dryIceSlabs+' slabs','~'+d.avgWeightLb+'# avg box')
+   kpiTile('Shipped',d.shipped,'fulfilled')
   ];
   kb.innerHTML=tiles.join('');
   bar.innerHTML=renderBars(d.ordersByDay);
