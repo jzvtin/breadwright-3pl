@@ -16,15 +16,33 @@ const express = require('express');
 const DASH_HTML = fs.readFileSync(path.join(__dirname, 'dashboard.html'), 'utf8');
 const LOGIN_HTML = fs.readFileSync(path.join(__dirname, 'dashboard-login.html'), 'utf8');
 
-const PW = process.env.DASH_PW || 'Bready';
+const PW = process.env.DASH_PW || 'Bready';          // admin (full console)
+const ICE_PW = process.env.ICECUBE_PW || 'icecube';  // Ice Cube (queue-only)
 const PEEK_KEY = process.env.PEEK_KEY || '';
 const COOKIE = 'bw_dash';
-const authToken = () => crypto.createHash('sha256').update(`${PW}|${PEEK_KEY}`).digest('hex');
+// Role-scoped session tokens (each role hashes its own pw, so an Ice Cube cookie
+// can never authenticate as admin and vice-versa).
+const tokenFor = (role, pw) => crypto.createHash('sha256').update(`${role}|${pw}|${PEEK_KEY}`).digest('hex');
+const ADMIN_TOKEN = () => tokenFor('admin', PW);
+const ICE_TOKEN = () => tokenFor('icecube', ICE_PW);
 
-function isAuthed(req) {
-  const m = (req.headers.cookie || '').match(/(?:^|;\s*)bw_dash=([a-f0-9]+)/);
-  return !!m && crypto.timingSafeEqual(Buffer.from(m[1]), Buffer.from(authToken()));
+// The actions the Ice Cube (queue-only) role may call. Everything else — test
+// drops, XML generate, confirmation tools, folder browser — is admin-only.
+const ICE_ACTIONS = new Set(['stats', 'shipqueue', 'demolabel', 'packslip', 'buylabel']);
+
+function eqHex(a, b) {
+  const ba = Buffer.from(String(a)); const bb = Buffer.from(String(b));
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
 }
+// Returns 'admin' | 'icecube' | null from the session cookie.
+function roleOf(req) {
+  const m = (req.headers.cookie || '').match(/(?:^|;\s*)bw_dash=([a-f0-9]+)/);
+  if (!m) return null;
+  if (eqHex(m[1], ADMIN_TOKEN())) return 'admin';
+  if (eqHex(m[1], ICE_TOKEN())) return 'icecube';
+  return null;
+}
+function isAuthed(req) { return !!roleOf(req); }
 function loginPage(err) {
   return LOGIN_HTML.replace('<!--ERR-->', err ? `<div class="err">${err}</div>` : '');
 }
@@ -50,7 +68,11 @@ async function proxy(method, peekPath, body) {
 async function handleAction(req, res) {
   const action = req.query.action;
   if (!action) return false;
-  if (!isAuthed(req)) { res.status(401).json({ error: 'unauthorized' }); return true; }
+  const role = roleOf(req);
+  if (!role) { res.status(401).json({ error: 'unauthorized' }); return true; }
+  // Ice Cube role is fenced to the queue actions — refuse everything else so a
+  // hand-crafted request can't reach the admin tools.
+  if (role === 'icecube' && !ICE_ACTIONS.has(action)) { res.status(403).json({ error: 'forbidden' }); return true; }
   try {
     let out;
     if (action === 'list') out = await proxy('GET', '/peek');
@@ -84,8 +106,11 @@ function registerDashboard(app) {
     // Same-origin action proxy (JSON body) takes precedence over the login form.
     if (req.query.action) { await handleAction(req, res); return; }
     const pw = req.body && typeof req.body.pw === 'string' ? req.body.pw : '';
-    if (crypto.timingSafeEqual(Buffer.from(pw.padEnd(64).slice(0, 64)), Buffer.from(PW.padEnd(64).slice(0, 64)))) {
-      res.setHeader('Set-Cookie', `${COOKIE}=${authToken()}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
+    let token = null;
+    if (eqHex(pw.padEnd(64).slice(0, 64), PW.padEnd(64).slice(0, 64))) token = ADMIN_TOKEN();
+    else if (eqHex(pw.padEnd(64).slice(0, 64), ICE_PW.padEnd(64).slice(0, 64))) token = ICE_TOKEN();
+    if (token) {
+      res.setHeader('Set-Cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`);
       return res.redirect('/');
     }
     res.status(401).type('html').send(loginPage('Incorrect password.'));
@@ -97,8 +122,11 @@ function registerDashboard(app) {
       return res.redirect('/');
     }
     if (await handleAction(req, res)) return;
-    if (!isAuthed(req)) return res.type('html').send(loginPage(''));
-    res.type('html').send(DASH_HTML);
+    const role = roleOf(req);
+    if (!role) return res.type('html').send(loginPage(''));
+    // Inject the role so CSS can hide admin-only sections and JS can slim the KPIs.
+    const html = DASH_HTML.replace('<body>', `<body class="role-${role}"><script>window.BW_ROLE=${JSON.stringify(role)}</script>`);
+    res.type('html').send(html);
   });
 }
 

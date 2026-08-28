@@ -92,6 +92,10 @@
  #viewer .vh{padding:12px 16px;background:#f2ead9;border-bottom:1px solid #e6dcc7;display:flex;justify-content:space-between;gap:12px;align-items:center}
  #viewer .fn{font-family:ui-monospace,monospace;font-size:13px;word-break:break-all}
  #viewer pre{margin:0;padding:16px;overflow:auto;font:12px/1.5 ui-monospace,monospace;white-space:pre;background:#fbfaf6;flex:1}
+/* Ice Cube (queue-only) role: hide every top-level panel except the ones
+   tagged .ice-show (Overview + Ship Queue). Admin sees everything. */
+.role-icecube .wrap>*{display:none!important}
+.role-icecube .wrap>.ice-show{display:block!important}
 </style></head><body>
 <header>
  <b>🍞 Breadwright 3PL — Live Console</b>
@@ -102,8 +106,8 @@
  <div class="status" id="statusbar"></div>
 
  <!-- ============ ANALYTICS HEADER (Shopify KPIs) ============ -->
- <h2 class="sec">📊 Overview <span id="an_days" style="font-size:12px;color:#8a7c5f;font-weight:400"></span></h2>
- <div id="anwrap">
+ <h2 class="sec ice-show">📊 Overview <span id="an_days" style="font-size:12px;color:#8a7c5f;font-weight:400"></span></h2>
+ <div id="anwrap" class="ice-show">
   <div id="kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px"></div>
   <div class="send" style="padding:14px 16px">
    <div style="font-size:12.5px;color:#6b5f47;font-weight:600;margin-bottom:8px">Orders per day</div>
@@ -112,8 +116,8 @@
  </div>
 
  <!-- ============ SHIP QUEUE (label console) ============ -->
- <h2 class="sec">🚚 Ship Queue — print &amp; track every label</h2>
- <div class="send">
+ <h2 class="sec ice-show">🚚 Ship Queue — print &amp; track every label</h2>
+ <div class="send ice-show">
   <h3>Today's orders, one place</h3>
   <p>Every order awaiting a label, with its locked <b>UPS</b> lane (overnight → Priority Shippers, ground/2-day → ShipStation).
      Print a label, see what's printed, reprint any time. <b>UPS only — never USPS.</b>
@@ -574,14 +578,22 @@ async function loadStats(){
   const r=await fetch('?action=stats&days=30');const d=await r.json();
   if(!r.ok||d.ok===false){kb.innerHTML='<div class="muted" style="font-size:12px;padding:6px">Overview unavailable'+(d.error?' ('+esc(d.error)+')':'')+'.</div>';return;}
   document.getElementById('an_days').textContent='· last '+d.days+' days';
-  kb.innerHTML=[
+  // Ice Cube gets the operational slim set (no revenue / AOV).
+  const ice=(window.BW_ROLE==='icecube');
+  const tiles=ice?[
+   kpiTile('To ship',d.toShip,'awaiting label'),
+   kpiTile('Shipped',d.shipped,'fulfilled'),
+   kpiTile('Orders',d.count,'last '+d.days+'d'),
+   kpiTile('Dry ice',d.dryIceSlabs+' slabs','~'+d.avgWeightLb+'# avg box')
+  ]:[
    kpiTile('Orders',d.count,null),
    kpiTile('Revenue',money(d.revenue),null),
    kpiTile('Avg order',money(d.aov),null),
    kpiTile('To ship',d.toShip,'awaiting label'),
    kpiTile('Shipped',d.shipped,'fulfilled'),
    kpiTile('Dry ice',d.dryIceSlabs+' slabs','~'+d.avgWeightLb+'# avg box')
-  ].join('');
+  ];
+  kb.innerHTML=tiles.join('');
   bar.innerHTML=renderBars(d.ordersByDay);
  }catch(e){kb.innerHTML='<div class="muted" style="font-size:12px;padding:6px">'+esc(e.message)+'</div>';}
 }
@@ -665,5 +677,6 @@ async function generateOrder(btn){
  finally{btn.disabled=false;}
 }
 addItem('the-breadwright-founders-box',1);
-load();loadFixtures();loadStats();loadQueue();setInterval(load,20000);
+loadStats();loadQueue();
+if(window.BW_ROLE!=='icecube'){load();loadFixtures();setInterval(load,20000);}
 </script></body></html>
