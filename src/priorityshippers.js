@@ -146,4 +146,43 @@ function toYmd(v) {
   return String(v).slice(0, 10);
 }
 
-module.exports = { getRates, cheapestByDeadline, normalizeRates, SHIP_FROM };
+/**
+ * BUY a label (create-label). SPENDS MONEY. Only called from the guarded
+ * /peek/buy-label path. Mirrors the get-rates body + a chosen service_code.
+ * @param {object} o  same shape as getRates + { service_code }
+ * @returns {{ ok, tracking, labelUrl, price, service, raw, error }}
+ */
+async function createLabel(o) {
+  if (!TOKEN) return { ok: false, error: 'PRIORITYSHIPPERS_TOKEN not set' };
+  if (!o.service_code) return { ok: false, error: 'service_code required to buy' };
+  const packages = (o.packages && o.packages.length ? o.packages : [{ weight: 8 }]).map((p, i) => {
+    const pkg = { ...p };
+    if (i === 0 && o.dryIceLb > 0) pkg.options = { ...(pkg.options || {}), dry_ice: { weight: o.dryIceLb } };
+    return pkg;
+  });
+  const req = {
+    addresses: { from: o.from || SHIP_FROM, to: o.to },
+    package_type: o.package_type || 'CUSTOMER_PACKAGING',
+    packages,
+    service_code: o.service_code,
+  };
+  if (o.ship_date) req.ship_date = o.ship_date;
+  const { status, body } = await post('create-label', req);
+  if (body && body.status === 'success') {
+    const d = body.data || {};
+    // Field names per the PS docs; kept permissive since this account's exact
+    // response shape is UNVERIFIED until the first real buy.
+    const label = (d.labels && d.labels[0]) || d.label || d;
+    return {
+      ok: true,
+      tracking: label.tracking_number || d.tracking_number || null,
+      labelUrl: label.label_url || label.url || d.label_url || null,
+      price: num(label.shipment_total || d.shipment_total || d.total),
+      service: label.service_name || o.service_code,
+      raw: body,
+    };
+  }
+  return { ok: false, error: (body && body.message) || `HTTP ${status}`, raw: body };
+}
+
+module.exports = { getRates, createLabel, cheapestByDeadline, normalizeRates, SHIP_FROM };

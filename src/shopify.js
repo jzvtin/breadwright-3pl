@@ -122,13 +122,15 @@ const API_VERSION = process.env.SHOPIFY_API_VERSION || '2024-10';
  * @param {object} opts { windowHours=25, now=Date, sentTag='3pl-sent' }
  * @returns {Promise<object[]>}
  */
-async function fetchOrdersForBatch({ windowHours = 25, now = new Date(), sentTag = '3pl-sent' } = {}) {
+async function fetchOrdersForBatch({ windowHours = 25, now = new Date(), sentTag = '3pl-sent', fulfillment = 'unshipped' } = {}) {
   const { store, token } = adminCreds();
   const since = new Date(now.getTime() - windowHours * 3600 * 1000).toISOString();
   const params = new URLSearchParams({
     status: 'any',
     financial_status: 'paid',
-    fulfillment_status: 'unshipped',
+    // 'unshipped' = the nightly batch's to-send set (default, never changes).
+    // The Ship Queue passes 'any' to ALSO show already-shipped orders (greyed).
+    fulfillment_status: fulfillment,
     created_at_min: since,
     limit: '250',
   });

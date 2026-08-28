@@ -500,10 +500,12 @@ async function loadQueue(btn){
    const di=o.dryIceSlabs?(o.dryIceSlabs+' slab'+(o.dryIceSlabs>1?'s':'')+(o.declareDryIce?' ⚠declare':'')):'—';
    let status,act;
    const pick='<button onclick="openPick(\''+esc(o.number)+'\',this)" style="padding:6px 12px;background:#7a5c34;margin-left:4px">Pick list</button>';
+   const shipped=o.shipped&&o.label&&o.label.source==='shipped';
    if(blocked){status='<span style="color:#a15a1a">⛔ '+esc(o.blocking[0]||'blocked')+'</span>';act='';}
+   else if(shipped){status='<span style="color:#5a6b3a">🚚 shipped</span>'+(o.label.tracking?'<br><span style="font-family:monospace;font-size:11px">'+esc(o.label.tracking)+'</span>':'');act='';}
    else if(o.label.printed){status='<span style="color:#2e7d32">✓ printed'+(o.label.reprints?' ('+o.label.reprints+'× reprint)':'')+'</span><br><span style="font-family:monospace;font-size:11px">'+esc(o.label.tracking)+'</span>';act='<button onclick="printLabel(\''+esc(o.number)+'\',true,this)" style="padding:6px 12px">Reprint</button>';}
    else{status='<span class="muted">not printed</span>';act='<button onclick="printLabel(\''+esc(o.number)+'\',false,this)" style="padding:6px 12px">Print label</button>';}
-   h+='<tr style="border-top:1px solid #ece0c8'+(blocked?';opacity:.6':'')+'"><td style="padding:6px 8px"><b>#'+esc(o.number)+'</b></td><td style="padding:6px 8px">'+esc(o.customer||'')+'</td><td style="padding:6px 8px">'+esc((o.city||'')+', '+(o.state||''))+'</td><td style="padding:6px 8px;text-align:right">'+o.weightLb+'#</td><td style="padding:6px 8px">'+esc(o.lane.service)+'<br><span class="tag" style="background:'+badge+';color:#fff">'+src+'</span></td><td style="padding:6px 8px">'+di+'</td><td style="padding:6px 8px">'+status+'</td><td style="padding:6px 8px;text-align:right;white-space:nowrap">'+act+(blocked?'':pick)+'</td></tr>';
+   h+='<tr style="border-top:1px solid #ece0c8'+(blocked||shipped?';opacity:.6':'')+'"><td style="padding:6px 8px"><b>#'+esc(o.number)+'</b></td><td style="padding:6px 8px">'+esc(o.customer||'')+'</td><td style="padding:6px 8px">'+esc((o.city||'')+', '+(o.state||''))+'</td><td style="padding:6px 8px;text-align:right">'+o.weightLb+'#</td><td style="padding:6px 8px">'+esc(o.lane.service)+'<br><span class="tag" style="background:'+badge+';color:#fff">'+src+'</span></td><td style="padding:6px 8px">'+di+'</td><td style="padding:6px 8px">'+status+'</td><td style="padding:6px 8px;text-align:right;white-space:nowrap">'+act+(blocked?'':pick)+'</td></tr>';
   });
   h+='</table>';
   box.innerHTML=h;

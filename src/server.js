@@ -837,26 +837,37 @@ function estimateWeightLb(pack) {
 // Enrich the pending review orders with lane + weight + label state.
 app.get('/peek/ship-queue', async (req, res) => {
   if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
-  const windowHours = Math.min(Math.max(Number(req.query.hours) || 25, 1), 24 * 30);
+  // Default window = 7 days so the queue shows the fuller recent set, not just
+  // the last day. `unshippedOnly=1` narrows to the true to-ship list.
+  const windowHours = Math.min(Math.max(Number(req.query.hours) || 168, 1), 24 * 30);
+  const unshippedOnly = req.query.unshippedOnly === '1';
   try {
-    const byNumber = new Map();
+    const byNumber = new Map(); // number -> { sum, raw }
     for (const rec of listPending()) {
       if (alreadySent(rec.id)) continue;
       const sum = summarizeOrder(rec.raw);
-      byNumber.set(String(sum.number), sum);
+      byNumber.set(String(sum.number), { sum, raw: rec.raw });
     }
     if (process.env.SHOPIFY_ADMIN_TOKEN) {
       try {
-        const raws = await fetchOrdersForBatch({ windowHours, sentTag: '3pl-sent' });
+        const raws = await fetchOrdersForBatch({ windowHours, sentTag: '3pl-sent', fulfillment: unshippedOnly ? 'unshipped' : 'any' });
         for (const raw of raws) {
           const sum = summarizeOrder(raw);
-          if (!byNumber.has(String(sum.number))) byNumber.set(String(sum.number), sum);
+          if (!byNumber.has(String(sum.number))) byNumber.set(String(sum.number), { sum, raw });
         }
       } catch (e) { console.warn('[ship-queue] Admin API merge skipped:', e.message); }
     }
-    const orders = Array.from(byNumber.values()).map((o) => {
+    const orders = Array.from(byNumber.values()).map(({ sum: o, raw }) => {
       const lane = routeLane(o.serviceTier);
-      const label = getLabel(o.number);
+      // Real Shopify fulfillment (ShipStation already shipped it) → show as
+      // shipped with its real tracking, greyed. Otherwise use our label store.
+      const ful = (raw && (raw.fulfillments || [])) || [];
+      const shipped = (raw && raw.fulfillment_status === 'fulfilled') || ful.length > 0;
+      const shipTracking = (ful[0] && (ful[0].tracking_number || (ful[0].tracking_numbers || [])[0])) || null;
+      const stored = getLabel(o.number);
+      const label = stored
+        ? { printed: true, tracking: stored.tracking, service: stored.service, source: stored.source, price: stored.price, demo: !!stored.demo, printedAt: stored.printedAt, reprints: stored.reprints || 0 }
+        : (shipped ? { printed: true, shipped: true, tracking: shipTracking, service: lane.service, source: 'shipped', demo: false, reprints: 0 } : { printed: false });
       return {
         number: o.number,
         customer: o.customer,
@@ -871,10 +882,13 @@ app.get('/peek/ship-queue', async (req, res) => {
         declareDryIce: !!o.pack.declareDryIce,
         canSend: o.canSend,
         blocking: o.blocking || [],
-        label: label ? { printed: true, tracking: label.tracking, service: label.service, source: label.source, price: label.price, demo: !!label.demo, printedAt: label.printedAt, reprints: label.reprints || 0 } : { printed: false },
+        shipped: !!shipped,
+        label,
       };
     });
-    res.json({ dryRun: DRY_RUN, buyingEnabled: LABEL_BUYING_ENABLED, count: orders.length, orders });
+    // Unshipped (still need a label) first, then shipped; newest-ish order desc.
+    orders.sort((a, b) => (a.shipped === b.shipped ? Number(b.number) - Number(a.number) : (a.shipped ? 1 : -1)));
+    res.json({ dryRun: DRY_RUN, buyingEnabled: LABEL_BUYING_ENABLED, windowHours, count: orders.length, orders });
   } catch (e) {
     console.error('[ship-queue] FAILED:', e);
     res.status(500).json({ error: e.message });
