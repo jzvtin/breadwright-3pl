@@ -93,28 +93,22 @@ function buildOrderNode(order, opts = {}) {
     // and BW_WB (welcome booklet) are NO LONGER emitted to Datex. Emitted line set
     // is now: bread + BW_BOX14 / BW_GCF1 / BW_GCF2 / BW_GELPK only.
 
-    // 2b) Dry ice — computed for the human pack sheet ONLY (never a Datex line).
-    //     AUTHORITATIVE RULE (Justin 2026-08-28, config/materials.js): the tag
-    //     suffix decides it — any *_AIR = 1 slab flat (UPS Air / Priority
-    //     Shippers); *_DAY = UPS Ground, dry ice BY ZONE from Fall River (near
-    //     <=3 = 0, mid 4-5 = 1, far >=6 = 2). The old weather model overcounted
-    //     (2 slabs for a near-zone 2-day ground) and is no longer used here.
-    const { zoneForZip } = require('../../config/dryice');
-    const zone = zoneForZip(zip);
-    const slabs = cfg.dryIceSlabs(order.serviceTier, zone, zip);
-    const air = cfg.isAirTier(order.serviceTier);
+    // 2b) Dry ice + carrier — SINGLE SOURCE OF TRUTH: serviceForZip (config/dryice.js,
+    //     Justin 2026-08-28). "Nothing over 2 days": near ground <=2 days = 2_DAY UPS
+    //     Ground, 0 dry ice; else AIR via Priority Shippers, 1 slab (2_AIR normally,
+    //     1_AIR for the far West). Dry ice is NEVER a Datex line — pack sheet only.
+    const { serviceForZip } = require('../../config/dryice');
+    const svc = serviceForZip(zip);
+    const air = svc.mode === 'air';
     dryIce = {
-      blocks: slabs,
-      lbs: slabs * cfg.SLAB_LB,
-      zone,
-      zoneKnown: zone != null,
-      mode: air ? 'air' : 'ground',
-      carrier: air ? 'Priority Shippers' : 'UPS Ground',
-      declareDryIce: air, // air always carries 1 slab -> must be declared
+      blocks: svc.slabs,
+      lbs: svc.slabs * cfg.SLAB_LB,
+      zone: svc.zone,
+      zoneKnown: svc.zone != null,
+      mode: svc.mode,
+      carrier: svc.service, // "UPS Next Day Air" / "UPS 2nd Day Air" / "UPS Ground"
+      declareDryIce: air,   // air always carries 1 slab -> must be declared
     };
-    if (!air && zone == null) {
-      warnings.push(`Dry ice: ZIP ${zip || '(none)'} not in the zone table — assumed ${slabs} slab(s). CONFIRM.`);
-    }
     if (dryIce.declareDryIce) {
       warnings.push(`AIR via Priority Shippers — DECLARE dry ice (check the dry-ice button; max 1 slab / 5 lb).`);
     }

@@ -124,6 +124,25 @@ function resolveShipMode(zip, zoneArg) {
     : { mode: 'air', carrier: 'Priority Shippers', declareDryIce: true, groundTransitDays: gd, zone, maxBlocks: AIR_MAX_BLOCKS };
 }
 
+// AUTHORITATIVE service decision from the DESTINATION (Justin 2026-08-28). The tag
+// is derived from the ZIP/zone, NOT the Shopify method — "nothing over 2 days":
+//   ground reaches in <=2 days  -> 2_DAY, UPS Ground (ShipStation), 0 dry ice
+//   ground too slow, not far West -> 2_AIR, 2nd Day Air (Priority Shippers), 1 slab
+//   ground too slow, far West (zip 8xx/9xx: AZ/CA/NV/WA/OR/UT/CO/NM/ID) -> 1_AIR,
+//                                  Next Day Air (Priority Shippers), 1 slab
+// Air is hard-capped at 1 slab; ground near Fall River needs none (gel packs only).
+function serviceForZip(zip) {
+  const m = resolveShipMode(zip);
+  if (m.mode === 'ground') {
+    return { tier: '2_DAY', vref: '2_DAY', mode: 'ground', source: 'shipstation', service: 'UPS Ground', slabs: 0, zone: m.zone };
+  }
+  const digits = String(zip || '').replace(/\D/g, '');
+  const farWest = /^[89]/.test(digits);
+  return farWest
+    ? { tier: '1_AIR', vref: '1_AIR', mode: 'air', source: 'priority_shippers', service: 'UPS Next Day Air', slabs: 1, zone: m.zone }
+    : { tier: '2_AIR', vref: '2_AIR', mode: 'air', source: 'priority_shippers', service: 'UPS 2nd Day Air', slabs: 1, zone: m.zone };
+}
+
 // UPS days with NO pickup/delivery (2026). Add/trim as needed — one-line edits.
 const UPS_HOLIDAYS_2026 = new Set([
   '2026-01-01', // New Year's Day
@@ -488,6 +507,7 @@ module.exports = {
   FREEZER_PAPER_PER_LOAF,
   zoneForZip,
   resolveShipMode,
+  serviceForZip,
   AIR_MAX_BLOCKS,
   businessTransit,
   geocodeZip,

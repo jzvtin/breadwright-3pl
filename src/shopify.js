@@ -5,6 +5,7 @@
  */
 const crypto = require('crypto');
 const { resolveServiceLevel, resolveServiceTier } = require('../config/materials');
+const { serviceForZip } = require('../config/dryice');
 
 /** Verify a Shopify webhook HMAC. rawBody must be the exact bytes received. */
 function verifyWebhook(rawBody, hmacHeader, secret) {
@@ -53,9 +54,11 @@ function normalizeOrder(o, now = new Date()) {
     orderId: o.id,
     // Default: request delivery ~2 days out. Adjust to your SLA / cutoff logic.
     requestedDelivery: isoDate(now, 2),
-    // Shipping speed the customer picked -> goes in <VendorReference> ("1 Day"/"2 Day"/...).
-    serviceLevel: resolveServiceLevel(o.shipping_lines), //  Datex <VendorReference>
-    serviceTier: resolveServiceTier(o.shipping_lines), //   pack-list display tier
+    // Service is derived from the DESTINATION ZIP (zone), NOT the Shopify method
+    // (Justin 2026-08-28): ground only where it arrives in <=2 days, else air —
+    // 2_AIR normally, 1_AIR for the far West. Drives <VendorReference> + lane + dry ice.
+    serviceLevel: serviceForZip(ship.zip || '').vref, //   Datex <VendorReference>
+    serviceTier: serviceForZip(ship.zip || '').tier, //    pack-list display tier + lane key
     // First order for this customer -> triggers first-order inserts (welcome booklet).
     isFirstOrder: !!(o.customer && Number(o.customer.orders_count) === 1),
     billing: mapAddr(bill, 'Customer'),
