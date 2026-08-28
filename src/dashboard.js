@@ -62,6 +62,7 @@ async function handleAction(req, res) {
     else if (action === 'rate') out = await proxy('POST', '/peek/priority-rate', req.body || {});
     else if (action === 'confirmfile') out = await proxy('POST', '/peek/confirm-file', req.body || {});
     else if (action === 'confirmdoc') out = await proxy('POST', '/peek/confirm-doc', req.body || {});
+    else if (action === 'stats') out = await proxy('GET', `/peek/stats?days=${encodeURIComponent(req.query.days || '30')}`);
     else if (action === 'shipqueue') out = await proxy('GET', '/peek/ship-queue');
     else if (action === 'demolabel') out = await proxy('GET', `/peek/demo-label?number=${encodeURIComponent(req.query.number || '')}${req.query.reprint ? '&reprint=1' : ''}`);
     else if (action === 'buylabel') out = await proxy('POST', `/peek/buy-label?number=${encodeURIComponent(req.query.number || '')}`, req.body || {});

@@ -101,6 +101,16 @@
 
  <div class="status" id="statusbar"></div>
 
+ <!-- ============ ANALYTICS HEADER (Shopify KPIs) ============ -->
+ <h2 class="sec">📊 Overview <span id="an_days" style="font-size:12px;color:#8a7c5f;font-weight:400"></span></h2>
+ <div id="anwrap">
+  <div id="kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px"></div>
+  <div class="send" style="padding:14px 16px">
+   <div style="font-size:12.5px;color:#6b5f47;font-weight:600;margin-bottom:8px">Orders per day</div>
+   <div id="anbar" style="overflow-x:auto"></div>
+  </div>
+ </div>
+
  <!-- ============ SHIP QUEUE (label console) ============ -->
  <h2 class="sec">🚚 Ship Queue — print &amp; track every label</h2>
  <div class="send">
@@ -113,7 +123,7 @@
    <b>Pick list</b> + <b>Label</b> → pack &amp; ship. Everything's UPS. That's it.
   </div>
   <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
-   <button onclick="loadQueue(this)" style="padding:9px 16px">Refresh queue</button>
+   <button onclick="loadQueue(this);loadStats()" style="padding:9px 16px">Refresh queue</button>
    <span id="sq_count" style="font-size:12.5px;color:#6b5f47"></span>
   </div>
   <div id="sqresult" style="overflow-x:auto"></div>
@@ -533,6 +543,49 @@ async function openPick(number,btn){
  }catch(e){if(w)w.document.body.innerHTML='<pre>'+esc(e.message)+'</pre>';}finally{if(btn)btn.disabled=false;}
 }
 
+// ---- 📊 Overview / analytics ------------------------------------------------
+function money(n){return '$'+Number(n||0).toLocaleString('en-US',{maximumFractionDigits:0});}
+function kpiTile(label,value,sub){
+ return '<div class="send" style="padding:14px 16px;margin:0"><div style="font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:#8a7c5f;font-weight:700">'+label+'</div>'+
+  '<div style="font-size:26px;font-weight:800;color:#3d3320;line-height:1.15;margin-top:4px">'+value+'</div>'+
+  (sub?'<div style="font-size:12px;color:#8a7c5f;margin-top:2px">'+sub+'</div>':'')+'</div>';
+}
+function renderBars(series){
+ if(!series||!series.length)return '<div class="muted" style="font-size:12px">No orders in range.</div>';
+ const max=Math.max(1,...series.map(d=>d.count));
+ const bw=30, gap=12, h=120, pad=22, w=series.length*(bw+gap)+pad;
+ const hue='#8a6d3b';
+ let bars='';
+ series.forEach((d,i)=>{
+  const bh=Math.round((d.count/max)*(h-pad));
+  const x=pad/2+i*(bw+gap), y=h-pad-bh;
+  bars+='<g><title>'+d.day+': '+d.count+' order'+(d.count===1?'':'s')+'</title>'+
+   '<rect x="'+x+'" y="'+y+'" width="'+bw+'" height="'+Math.max(bh,1)+'" rx="4" fill="'+hue+'"/>'+
+   (d.count?'<text x="'+(x+bw/2)+'" y="'+(y-4)+'" text-anchor="middle" font-size="11" font-weight="700" fill="#5c4a2a">'+d.count+'</text>':'')+
+   '<text x="'+(x+bw/2)+'" y="'+(h-6)+'" text-anchor="middle" font-size="9.5" fill="#a2977f">'+esc(d.day.slice(5))+'</text></g>';
+ });
+ return '<svg width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="Orders per day">'+
+  '<line x1="'+(pad/2-2)+'" y1="'+(h-pad)+'" x2="'+(w-pad/2)+'" y2="'+(h-pad)+'" stroke="#e2d4b6" stroke-width="1"/>'+bars+'</svg>';
+}
+async function loadStats(){
+ const kb=document.getElementById('kpis'), bar=document.getElementById('anbar');
+ kb.innerHTML='<div class="muted" style="font-size:12px;padding:6px">Loading overview…</div>';
+ try{
+  const r=await fetch('?action=stats&days=30');const d=await r.json();
+  if(!r.ok||d.ok===false){kb.innerHTML='<div class="muted" style="font-size:12px;padding:6px">Overview unavailable'+(d.error?' ('+esc(d.error)+')':'')+'.</div>';return;}
+  document.getElementById('an_days').textContent='· last '+d.days+' days';
+  kb.innerHTML=[
+   kpiTile('Orders',d.count,null),
+   kpiTile('Revenue',money(d.revenue),null),
+   kpiTile('Avg order',money(d.aov),null),
+   kpiTile('To ship',d.toShip,'awaiting label'),
+   kpiTile('Shipped',d.shipped,'fulfilled'),
+   kpiTile('Dry ice',d.dryIceSlabs+' slabs','~'+d.avgWeightLb+'# avg box')
+  ].join('');
+  bar.innerHTML=renderBars(d.ordersByDay);
+ }catch(e){kb.innerHTML='<div class="muted" style="font-size:12px;padding:6px">'+esc(e.message)+'</div>';}
+}
+
 // ---- 📋 Confirmation reader -------------------------------------------------
 async function readConfirm(btn){
  const box=document.getElementById('cffresult');box.style.display='block';
@@ -612,5 +665,5 @@ async function generateOrder(btn){
  finally{btn.disabled=false;}
 }
 addItem('the-breadwright-founders-box',1);
-load();loadFixtures();setInterval(load,20000);
+load();loadFixtures();loadStats();loadQueue();setInterval(load,20000);
 </script></body></html>

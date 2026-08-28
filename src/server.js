@@ -895,6 +895,60 @@ app.get('/peek/ship-queue', async (req, res) => {
   }
 });
 
+// ANALYTICS for the dashboard header (Shopify-style KPIs + orders/day). Pulls the
+// last N days of PAID orders via read_orders and rolls them up. Read-only.
+//   GET /peek/stats?key=<PEEK_KEY>&days=30
+app.get('/peek/stats', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 120);
+  if (!process.env.SHOPIFY_ADMIN_TOKEN) return res.json({ ok: false, error: 'no Shopify token', days });
+  try {
+    // sentTag='__none__' so nothing is filtered out — we want ALL paid orders.
+    const raws = await fetchOrdersForBatch({ windowHours: days * 24, fulfillment: 'any', sentTag: '__none__' });
+    let revenue = 0, toShip = 0, shipped = 0, slabs = 0, weightLb = 0;
+    const byDay = new Map();
+    for (const raw of raws) {
+      revenue += Number(raw.total_price) || 0;
+      const isShipped = raw.fulfillment_status === 'fulfilled' || (raw.fulfillments || []).length > 0;
+      if (isShipped) shipped++; else toShip++;
+      const day = String(raw.created_at || '').slice(0, 10);
+      if (day) byDay.set(day, (byDay.get(day) || 0) + 1);
+      try {
+        const order = normalizeOrder(raw);
+        const { pack } = buildCustomerOrder(order);
+        slabs += pack.dryIceSlabs || 0;
+        weightLb += estimateWeightLb(pack);
+      } catch (_) {}
+    }
+    const count = raws.length;
+    // Fill a continuous day series (last min(days,14) days) so the bar has no gaps.
+    const span = Math.min(days, 14);
+    const series = [];
+    const today = String((raws[0] && raws[0].created_at) || '').slice(0, 10) || null;
+    // Build from the max day present to keep it timezone-free (no Date.now use).
+    const allDays = Array.from(byDay.keys()).sort();
+    const last = allDays.length ? allDays[allDays.length - 1] : today;
+    if (last) {
+      const base = new Date(last + 'T00:00:00Z');
+      for (let i = span - 1; i >= 0; i--) {
+        const d = new Date(base.getTime() - i * 86400000).toISOString().slice(0, 10);
+        series.push({ day: d, count: byDay.get(d) || 0 });
+      }
+    }
+    res.json({
+      ok: true, days, count,
+      revenue: Math.round(revenue * 100) / 100,
+      aov: count ? Math.round((revenue / count) * 100) / 100 : 0,
+      toShip, shipped, dryIceSlabs: slabs,
+      avgWeightLb: count ? Math.round((weightLb / count) * 10) / 10 : 0,
+      ordersByDay: series,
+    });
+  } catch (e) {
+    console.error('[stats] FAILED:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // DEMO LABEL (no purchase, no money). Renders a printable 4x6 UPS-style label for
 // one order and records it as "printed" so the queue shows status + reprints.
 // The tracking number is a DEMO placeholder. This never calls a carrier API.
