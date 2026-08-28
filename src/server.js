@@ -102,6 +102,23 @@ fs.mkdirSync(SENT_DIR, { recursive: true });
 const alreadySent = (id) => fs.existsSync(path.join(SENT_DIR, `${id}.json`));
 const markSent = (id, meta) => fs.writeFileSync(path.join(SENT_DIR, `${id}.json`), JSON.stringify(meta));
 
+// LABEL STORE. One JSON per order number tracking its label state so the Ship
+// Queue can show printed/not, tracking, price, and a reprint count. On-disk so
+// it survives a restart (a full Railway redeploy clears it — fine for the demo).
+// meta = { number, source, carrier, service, tracking, price, demo, printedAt, reprints }.
+const LABEL_DIR = path.join(__dirname, '../out/.labels');
+fs.mkdirSync(LABEL_DIR, { recursive: true });
+const labelPath = (n) => path.join(LABEL_DIR, `${String(n).replace(/[^0-9A-Za-z_-]/g, '')}.json`);
+const getLabel = (n) => { try { return JSON.parse(fs.readFileSync(labelPath(n), 'utf8')); } catch (_) { return null; } };
+const saveLabel = (n, meta) => fs.writeFileSync(labelPath(n), JSON.stringify(meta));
+
+// SPEND SAFETY GUARDS for buying real labels. All OFF by default so the demo can
+// NEVER charge money. To ever enable a real purchase you must set LABEL_BUYING=1
+// AND stay under LABEL_MAX_USD; a re-buy of an order that already has a label is
+// always refused (no double charge). UPS ONLY — USPS is never offered/bought.
+const LABEL_BUYING_ENABLED = process.env.LABEL_BUYING === '1';
+const LABEL_MAX_USD = Number(process.env.LABEL_MAX_USD || 60);
+
 // PENDING REVIEW STORE. The Shopify orders/paid webhook STAGES each raw order
 // here (it does NOT auto-send); the console lists them and the operator confirms
 // each one. On-disk so it survives a process restart (a full Railway REDEPLOY
@@ -787,6 +804,209 @@ app.get('/peek/carriers', async (reqE, res) => {
     res.json(carriers);
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
+
+// ---------------------------------------------------------------------------
+// SHIP QUEUE (the Ice-Cube-facing label console — Vertex-admin-style).
+// One place to SEE every order, its locked UPS lane, and its label state; print
+// / reprint a label per order. UPS ONLY (USPS is never routed or bought).
+//
+// Lane routing (carrier is always UPS; only the label SOURCE + service differ):
+//   air tiers (1_DAY/1_AIR/AIR/overnight) -> Priority Shippers, UPS Next Day Air
+//   2_DAY / 2_AIR                         -> ShipStation,       UPS 2nd Day Air
+//   3_DAY / ground / other                -> ShipStation,       UPS Ground
+// ---------------------------------------------------------------------------
+function routeLane(serviceTier) {
+  const t = String(serviceTier || '').toUpperCase();
+  if (/^(1_DAY|1_AIR|AIR|OVERNIGHT|NEXT)/.test(t)) return { source: 'priority_shippers', service: 'UPS Next Day Air', mode: 'air' };
+  if (/^(2_DAY|2_AIR)/.test(t)) return { source: 'shipstation', service: 'UPS 2nd Day Air', mode: '2day' };
+  if (/^(3_DAY|GROUND)/.test(t)) return { source: 'shipstation', service: 'UPS Ground', mode: 'ground' };
+  return { source: 'shipstation', service: 'UPS 2nd Day Air', mode: '2day' }; // safe default
+}
+
+// Rough shippable weight (lb) from the pack = loaves + packaging + dry ice.
+function estimateWeightLb(pack) {
+  const ss = require('./shipstation');
+  const cfg = require('../config/materials');
+  let oz = 0;
+  for (const c of (pack.contents || [])) oz += ss.unitOz(c.code) * (c.qty || 0);
+  if (!pack.materialsOnly) for (const p of (cfg.PACKAGING || [])) oz += ss.unitOz(p.code) * (p.qty || 0);
+  const lb = oz / 16 + (pack.dryIceLb || 0);
+  return Math.max(1, Math.round(lb * 10) / 10);
+}
+
+// Enrich the pending review orders with lane + weight + label state.
+app.get('/peek/ship-queue', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  const windowHours = Math.min(Math.max(Number(req.query.hours) || 25, 1), 24 * 30);
+  try {
+    const byNumber = new Map();
+    for (const rec of listPending()) {
+      if (alreadySent(rec.id)) continue;
+      const sum = summarizeOrder(rec.raw);
+      byNumber.set(String(sum.number), sum);
+    }
+    if (process.env.SHOPIFY_ADMIN_TOKEN) {
+      try {
+        const raws = await fetchOrdersForBatch({ windowHours, sentTag: '3pl-sent' });
+        for (const raw of raws) {
+          const sum = summarizeOrder(raw);
+          if (!byNumber.has(String(sum.number))) byNumber.set(String(sum.number), sum);
+        }
+      } catch (e) { console.warn('[ship-queue] Admin API merge skipped:', e.message); }
+    }
+    const orders = Array.from(byNumber.values()).map((o) => {
+      const lane = routeLane(o.serviceTier);
+      const label = getLabel(o.number);
+      return {
+        number: o.number,
+        customer: o.customer,
+        shipTo: o.shipTo,
+        city: o.city,
+        state: o.state,
+        serviceTier: o.serviceTier,
+        serviceLevel: o.serviceLevel,
+        lane,
+        weightLb: estimateWeightLb(o.pack),
+        dryIceSlabs: o.pack.dryIceSlabs,
+        declareDryIce: !!o.pack.declareDryIce,
+        canSend: o.canSend,
+        blocking: o.blocking || [],
+        label: label ? { printed: true, tracking: label.tracking, service: label.service, source: label.source, price: label.price, demo: !!label.demo, printedAt: label.printedAt, reprints: label.reprints || 0 } : { printed: false },
+      };
+    });
+    res.json({ dryRun: DRY_RUN, buyingEnabled: LABEL_BUYING_ENABLED, count: orders.length, orders });
+  } catch (e) {
+    console.error('[ship-queue] FAILED:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DEMO LABEL (no purchase, no money). Renders a printable 4x6 UPS-style label for
+// one order and records it as "printed" so the queue shows status + reprints.
+// The tracking number is a DEMO placeholder. This never calls a carrier API.
+//   GET /peek/demo-label?key=<PEEK_KEY>&number=1038[&reprint=1]
+app.get('/peek/demo-label', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).send('unauthorized');
+  const number = String(req.query.number || '').trim();
+  if (!number) return res.status(400).send('missing ?number=');
+  try {
+    let raw = (findPendingByNumber(number) || {}).raw;
+    if (!raw && process.env.SHOPIFY_ADMIN_TOKEN) raw = await fetchOrderRawByNumber(number);
+    if (!raw) return res.status(404).send(`order #${esc(number)} not in queue`);
+    const order = normalizeOrder(raw);
+    const { pack } = buildCustomerOrder(order);
+    const lane = routeLane(order.serviceTier);
+    const prev = getLabel(number);
+    const isReprint = !!prev || req.query.reprint;
+    // A demo tracking number is stable per order (deterministic from the number)
+    // so a reprint shows the SAME tracking, like a real reprint would.
+    const tracking = (prev && prev.tracking) || `1Z999DEMO${String(number).padStart(8, '0')}`;
+    const meta = {
+      number, source: lane.source, carrier: 'UPS', service: lane.service, tracking,
+      price: null, demo: true,
+      printedAt: (prev && prev.printedAt) || new Date().toISOString(),
+      reprints: prev ? (prev.reprints || 0) + 1 : 0,
+    };
+    saveLabel(number, meta);
+    res.type('html').send(demoLabelHtml(order, pack, lane, tracking, meta.reprints));
+  } catch (e) {
+    res.status(502).send('label failed: ' + esc(e.message));
+  }
+});
+
+// PICK LIST for one queue order. Resolves the SAME way as the label (staged
+// webhook payload first, then Shopify) so it works with or without a live token.
+//   GET /peek/packslip?key=<PEEK_KEY>&number=1038
+app.get('/peek/packslip', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).send('unauthorized');
+  const number = String(req.query.number || '').trim();
+  if (!number) return res.status(400).send('missing ?number=');
+  try {
+    let raw = (findPendingByNumber(number) || {}).raw;
+    if (!raw && process.env.SHOPIFY_ADMIN_TOKEN) raw = await fetchOrderRawByNumber(number);
+    if (!raw) return res.status(404).send(`order #${esc(number)} not in queue`);
+    const order = normalizeOrder(raw);
+    const { pack } = buildCustomerOrder(order);
+    res.type('html').send(packSlipHtml(pack, order));
+  } catch (e) {
+    res.status(502).send('pick list failed: ' + esc(e.message));
+  }
+});
+
+// The guarded REAL-buy path. Deliberately refuses until every guard passes so a
+// stray click can never spend money during the demo. Wire the create-label calls
+// (Priority Shippers / ShipStation v2) here ONLY after Justin funds an account +
+// flips LABEL_BUYING=1. UPS ONLY.
+//   POST /peek/buy-label?key=<PEEK_KEY>&number=1038
+app.post('/peek/buy-label', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  const number = String(req.query.number || (req.body && req.body.number) || '').trim();
+  if (!number) return res.status(400).json({ error: 'missing ?number=' });
+  const existing = getLabel(number);
+  if (existing && !existing.demo) return res.status(409).json({ error: `order #${number} already has a paid label (${existing.tracking}); reprint instead — no double charge` });
+  if (!LABEL_BUYING_ENABLED) return res.status(403).json({ error: 'label BUYING is disabled (demo mode). Set LABEL_BUYING=1 + fund the account to enable real purchases.', guard: 'LABEL_BUYING' });
+  // Real purchase intentionally NOT wired yet — the guards above are the point.
+  return res.status(501).json({ error: 'real label buy not wired yet — pending funding-account decision', maxUsd: LABEL_MAX_USD });
+});
+
+// A printable 4x6 UPS-style DEMO label. Big service banner, ship-from/ship-to,
+// Code 128 barcode of the tracking, and an unmissable DEMO watermark so nobody
+// mistakes it for a real, scannable UPS label.
+function demoLabelHtml(order, pack, lane, tracking, reprints) {
+  const { barcodeSvg } = require('./packslip');
+  const s = order.shipping || {};
+  const to = [
+    `${esc(s.accountName || s.name || '')}`,
+    `${esc(s.addressLine1 || '')}${s.addressLine2 ? ' ' + esc(s.addressLine2) : ''}`,
+    `${esc(s.city || '')}, ${esc(s.state || '')} ${esc(s.postalCode || '')}`,
+  ].join('<br>');
+  const bc = barcodeSvg(String(tracking), { moduleWidth: 1.4, height: 60 });
+  const ordBc = barcodeSvg(String(order.number), { moduleWidth: 1.4, height: 40 });
+  return `<!doctype html><meta charset="utf-8"><title>DEMO label #${esc(order.number)}</title>
+<style>
+  @page { size: 4in 6in; margin: 0; }
+  html,body{margin:0}
+  .lbl{width:4in;height:6in;box-sizing:border-box;border:2px solid #000;padding:10px 12px;font:12px/1.35 Arial,Helvetica,sans-serif;color:#000;position:relative;overflow:hidden}
+  .wm{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:900 46px Arial;color:rgba(200,0,0,.14);transform:rotate(-28deg);letter-spacing:4px;pointer-events:none}
+  .row{display:flex;justify-content:space-between;align-items:flex-start}
+  .brand{font-weight:800;font-size:15px}
+  .svc{margin:6px 0;padding:6px 8px;background:#000;color:#fff;font-weight:800;font-size:17px;text-align:center;letter-spacing:.5px}
+  .box{border-top:1px solid #000;margin-top:6px;padding-top:5px}
+  .lab{font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#333}
+  .to{font-size:15px;font-weight:700;line-height:1.3}
+  .bc{margin-top:6px;text-align:center}
+  .bc svg{max-width:100%}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .foot{position:absolute;bottom:8px;left:12px;right:12px;font-size:9px;color:#333;display:flex;justify-content:space-between}
+  @media print{.noprint{display:none}}
+  .noprint{position:fixed;top:8px;right:8px}
+  .noprint button{font:600 13px Arial;padding:8px 14px;border:0;border-radius:6px;background:#7a3;color:#fff;cursor:pointer}
+</style>
+<div class="noprint"><button onclick="print()">Print</button></div>
+<div class="lbl">
+  <div class="wm">DEMO — NOT VALID</div>
+  <div class="row">
+    <div class="brand">BREADWRIGHT</div>
+    <div style="text-align:right"><div class="lab">Carrier</div><div style="font-weight:800">UPS ${esc(lane.mode.toUpperCase())}</div></div>
+  </div>
+  <div class="lab" style="margin-top:2px">Ship From</div>
+  <div>Ice Cube Cold Storage · 451 Currant Rd, Fall River MA 02720</div>
+  <div class="svc">${esc(lane.service)}</div>
+  <div class="box">
+    <div class="lab">Ship To</div>
+    <div class="to">${to}</div>
+  </div>
+  <div class="box">
+    <div class="row"><span class="lab">Order</span><span class="lab">${pack.loafUnits || ''} loaves · ${pack.dryIceSlabs || 0} slab dry ice${pack.declareDryIce ? ' · DECLARE' : ''}</span></div>
+    <div class="bc">${ordBc}<div class="mono">#${esc(order.number)}</div></div>
+  </div>
+  <div class="box">
+    <div class="lab">Tracking (demo)</div>
+    <div class="bc">${bc}<div class="mono">${esc(tracking)}</div></div>
+  </div>
+  <div class="foot"><span>${lane.source === 'priority_shippers' ? 'Priority Shippers' : 'ShipStation'} · UPS</span><span>${reprints ? 'REPRINT #' + reprints : 'First print'}</span></div>
+</div>`;
+}
 
 // Combined Datex XML for MULTIPLE orders (one <Orders> batch envelope) — for
 // Sam to attach ONE file covering several orders to his Ice Cube email.

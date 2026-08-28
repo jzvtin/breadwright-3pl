@@ -101,6 +101,24 @@
 
  <div class="status" id="statusbar"></div>
 
+ <!-- ============ SHIP QUEUE (label console) ============ -->
+ <h2 class="sec">🚚 Ship Queue — print &amp; track every label</h2>
+ <div class="send">
+  <h3>Today's orders, one place</h3>
+  <p>Every order awaiting a label, with its locked <b>UPS</b> lane (overnight → Priority Shippers, ground/2-day → ShipStation).
+     Print a label, see what's printed, reprint any time. <b>UPS only — never USPS.</b>
+     <span id="sq_mode" class="tag">DEMO — labels don't buy postage yet</span></p>
+  <div style="background:#fff6e6;border:1px solid #e6cf9a;border-radius:10px;padding:10px 14px;margin:6px 0 12px;font-size:13px">
+   <b>Ice Cube — daily:</b> log in here at <b>api.breadwrightbox.com</b> → click <b>Refresh queue</b> → for each order print the
+   <b>Pick list</b> + <b>Label</b> → pack &amp; ship. Everything's UPS. That's it.
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+   <button onclick="loadQueue(this)" style="padding:9px 16px">Refresh queue</button>
+   <span id="sq_count" style="font-size:12.5px;color:#6b5f47"></span>
+  </div>
+  <div id="sqresult" style="overflow-x:auto"></div>
+ </div>
+
  <!-- ============ HOW IT WORKS ============ -->
  <h2 class="sec">How the integration works</h2>
  <div class="diagram">
@@ -460,6 +478,57 @@ async function getRates(btn){
   h+='</table>';
   okBox(box,h);
  }catch(e){errBox(box,e.message);}finally{btn.disabled=false;}
+}
+
+// ---- 🚚 Ship Queue ----------------------------------------------------------
+async function loadQueue(btn){
+ const box=document.getElementById('sqresult');
+ box.innerHTML='<div class="muted" style="padding:10px">Loading queue…</div>';
+ if(btn)btn.disabled=true;
+ try{
+  const r=await fetch('?action=shipqueue');const d=await r.json();
+  if(!r.ok||d.error){box.innerHTML='<div class="errbox">'+esc(d.error||('HTTP '+r.status))+'</div>';return;}
+  document.getElementById('sq_count').textContent=d.count+' order(s) in queue';
+  document.getElementById('sq_mode').textContent=d.buyingEnabled?'LIVE — real postage':'DEMO — labels don’t buy postage yet';
+  if(!d.count){box.innerHTML='<div class="muted" style="padding:10px">No orders waiting (needs paid, unfulfilled orders in the window).</div>';return;}
+  let h='<table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:720px">';
+  h+='<tr><th style="text-align:left;padding:6px 8px">Order</th><th style="text-align:left;padding:6px 8px">Customer</th><th style="text-align:left;padding:6px 8px">Destination</th><th style="text-align:right;padding:6px 8px">Wt</th><th style="text-align:left;padding:6px 8px">UPS lane</th><th style="text-align:left;padding:6px 8px">Dry ice</th><th style="text-align:left;padding:6px 8px">Status</th><th style="padding:6px 8px"></th></tr>';
+  d.orders.forEach(o=>{
+   const src=o.lane.source==='priority_shippers'?'Priority Shippers':'ShipStation';
+   const badge=o.lane.source==='priority_shippers'?'#7a5c34':'#3b6ea3';
+   const blocked=!o.canSend;
+   const di=o.dryIceSlabs?(o.dryIceSlabs+' slab'+(o.dryIceSlabs>1?'s':'')+(o.declareDryIce?' ⚠declare':'')):'—';
+   let status,act;
+   const pick='<button onclick="openPick(\''+esc(o.number)+'\',this)" style="padding:6px 12px;background:#7a5c34;margin-left:4px">Pick list</button>';
+   if(blocked){status='<span style="color:#a15a1a">⛔ '+esc(o.blocking[0]||'blocked')+'</span>';act='';}
+   else if(o.label.printed){status='<span style="color:#2e7d32">✓ printed'+(o.label.reprints?' ('+o.label.reprints+'× reprint)':'')+'</span><br><span style="font-family:monospace;font-size:11px">'+esc(o.label.tracking)+'</span>';act='<button onclick="printLabel(\''+esc(o.number)+'\',true,this)" style="padding:6px 12px">Reprint</button>';}
+   else{status='<span class="muted">not printed</span>';act='<button onclick="printLabel(\''+esc(o.number)+'\',false,this)" style="padding:6px 12px">Print label</button>';}
+   h+='<tr style="border-top:1px solid #ece0c8'+(blocked?';opacity:.6':'')+'"><td style="padding:6px 8px"><b>#'+esc(o.number)+'</b></td><td style="padding:6px 8px">'+esc(o.customer||'')+'</td><td style="padding:6px 8px">'+esc((o.city||'')+', '+(o.state||''))+'</td><td style="padding:6px 8px;text-align:right">'+o.weightLb+'#</td><td style="padding:6px 8px">'+esc(o.lane.service)+'<br><span class="tag" style="background:'+badge+';color:#fff">'+src+'</span></td><td style="padding:6px 8px">'+di+'</td><td style="padding:6px 8px">'+status+'</td><td style="padding:6px 8px;text-align:right;white-space:nowrap">'+act+(blocked?'':pick)+'</td></tr>';
+  });
+  h+='</table>';
+  box.innerHTML=h;
+ }catch(e){box.innerHTML='<div class="errbox">'+esc(e.message)+'</div>';}finally{if(btn)btn.disabled=false;}
+}
+async function printLabel(number,reprint,btn){
+ if(btn)btn.disabled=true;
+ const w=window.open('','_blank');
+ if(w)w.document.write('<p style="font:14px Arial;padding:20px">Preparing label #'+esc(number)+'…</p>');
+ try{
+  const r=await fetch('?action=demolabel&number='+encodeURIComponent(number)+(reprint?'&reprint=1':''));
+  const html=await r.text();
+  if(w){w.document.open();w.document.write(html);w.document.close();}
+  setTimeout(()=>loadQueue(),400);
+ }catch(e){if(w)w.document.body.innerHTML='<pre>'+esc(e.message)+'</pre>';}finally{if(btn)btn.disabled=false;}
+}
+async function openPick(number,btn){
+ if(btn)btn.disabled=true;
+ const w=window.open('','_blank');
+ if(w)w.document.write('<p style="font:14px Arial;padding:20px">Loading pick list #'+esc(number)+'…</p>');
+ try{
+  const r=await fetch('?action=packslip&number='+encodeURIComponent(number));
+  const html=await r.text();
+  if(w){w.document.open();w.document.write(html);w.document.close();}
+ }catch(e){if(w)w.document.body.innerHTML='<pre>'+esc(e.message)+'</pre>';}finally{if(btn)btn.disabled=false;}
 }
 
 // ---- 📋 Confirmation reader -------------------------------------------------
