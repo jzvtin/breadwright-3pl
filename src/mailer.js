@@ -48,8 +48,14 @@ function transport() {
 const RELAY_URL = process.env.MAIL_RELAY_URL || ''; // e.g. https://dynaradigital.com/bw-mail.php
 const RELAY_KEY = process.env.MAIL_RELAY_KEY || '';
 
-async function sendMail({ to, subject, text, html }) {
+/**
+ * @param {object} p
+ * @param {Array}  [p.attachments]  [{ filename, content }] where content is a
+ *   base64 string (Resend/relay) — used to attach the bought label PDF.
+ */
+async function sendMail({ to, subject, text, html, attachments }) {
   const recipients = (Array.isArray(to) && to.length ? to : DEFAULT_TO);
+  const atts = Array.isArray(attachments) ? attachments.filter((a) => a && a.filename && a.content) : [];
 
   // 0) DreamHost HTTPS relay (preferred on Railway — own domain, no signup, no SMTP)
   if (RELAY_URL && RELAY_KEY) {
@@ -57,7 +63,7 @@ async function sendMail({ to, subject, text, html }) {
       const res = await fetch(`${RELAY_URL}?key=${encodeURIComponent(RELAY_KEY)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Mail-Key': RELAY_KEY },
-        body: JSON.stringify({ to: recipients, subject, text, html: html || undefined, from: MAIL_FROM || 'Breadwright 3PL <no-reply@dynaradigital.com>' }),
+        body: JSON.stringify({ to: recipients, subject, text, html: html || undefined, from: MAIL_FROM || 'Breadwright 3PL <no-reply@dynaradigital.com>', attachments: atts.length ? atts : undefined }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body.ok === false) { console.error(`[mailer] relay HTTP ${res.status}:`, body); return { sent: false, to: recipients, error: (body && body.error) || `HTTP ${res.status}` }; }
@@ -74,7 +80,7 @@ async function sendMail({ to, subject, text, html }) {
       const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { Authorization: `Bearer ${RESEND_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: MAIL_FROM || 'onboarding@resend.dev', to: recipients, subject, text, html: html || undefined }),
+        body: JSON.stringify({ from: MAIL_FROM || 'onboarding@resend.dev', to: recipients, subject, text, html: html || undefined, attachments: atts.length ? atts : undefined }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) { console.error(`[mailer] Resend HTTP ${res.status}:`, body); return { sent: false, to: recipients, error: (body && body.message) || `HTTP ${res.status}` }; }
@@ -91,7 +97,7 @@ async function sendMail({ to, subject, text, html }) {
     return { sent: false, to: recipients, skipped: 'no email transport configured' };
   }
   try {
-    const info = await transport().sendMail({ from: MAIL_FROM || SMTP_USER, to: recipients.join(', '), subject, text, html: html || undefined });
+    const info = await transport().sendMail({ from: MAIL_FROM || SMTP_USER, to: recipients.join(', '), subject, text, html: html || undefined, attachments: atts.length ? atts.map((a) => ({ filename: a.filename, content: a.content, encoding: 'base64' })) : undefined });
     return { sent: true, to: recipients, id: info.messageId, via: 'smtp' };
   } catch (e) {
     console.error('[mailer] SMTP send failed:', e.message);

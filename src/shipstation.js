@@ -34,6 +34,17 @@ const API_KEY = process.env.SHIPSTATION_API_KEY || '';
 // Default ship-from = the account's default warehouse (Breadwright Fulfillment,
 // 451 Currant Rd, Fall River MA). Override via env if it ever changes.
 const WAREHOUSE_ID = process.env.SHIPSTATION_WAREHOUSE_ID || 'se-2278457';
+// Breadwright's OWN negotiated UPS carrier inside ShipStation (its rates beat
+// ShipStation's stock UPS). Forces the label onto that account. Get the id from
+// GET /v2/carriers (carrier_id like "se-123456"); set in Railway env.
+const UPS_CARRIER_ID = process.env.SHIPSTATION_UPS_CARRIER_ID || '';
+
+// Map our lane service label -> ShipStation v2 UPS service_code.
+const SS_SERVICE_CODE = {
+  'UPS Ground': 'ups_ground',
+  'UPS 2nd Day Air': 'ups_2nd_day_air',
+  'UPS Next Day Air': 'ups_next_day_air',
+};
 
 // Descriptions + realistic empty weights (oz) for the packaging materials, which
 // are NOT in CASE_PACK. Used only for the pack list / package weight estimate.
@@ -206,4 +217,36 @@ async function getRates(shipment, carrierIds) {
   return req('POST', '/v2/rates', body);
 }
 
-module.exports = { loafItems, packagingItems, buildTestShipment, createShipments, tagShipment, getRates, req, unitOz, WAREHOUSE_ID };
+/**
+ * BUY a UPS label for a shipment (v2 /v2/labels). SPENDS MONEY. Forces the
+ * Breadwright negotiated UPS carrier + the chosen service, returns a 4x6 PDF.
+ * Only called from the guarded /peek/buy-label path.
+ * @param {object} shipment  a v2 shipment (from buildTestShipment().shipment)
+ * @param {object} opts { service ('UPS Ground'|...), serviceCode?, carrierId? }
+ * @returns {{ ok, tracking, labelUrl, price, carrier, service, raw, error }}
+ */
+async function buyLabelFromShipment(shipment, opts = {}) {
+  if (!API_KEY) return { ok: false, error: 'SHIPSTATION_API_KEY not set' };
+  const carrierId = opts.carrierId || UPS_CARRIER_ID;
+  if (!carrierId) return { ok: false, error: 'SHIPSTATION_UPS_CARRIER_ID not set (needed to force the Breadwright UPS account)' };
+  const serviceCode = opts.serviceCode || SS_SERVICE_CODE[opts.service] || 'ups_ground';
+  const ship = { ...shipment, validate_address: 'no_validation', carrier_id: carrierId, service_code: serviceCode };
+  const body = { shipment: ship, label_format: 'pdf', label_layout: '4x6' };
+  const { status, body: res } = await req('POST', '/v2/labels', body);
+  if (status >= 200 && status < 300 && res && !res.errors) {
+    const dl = res.label_download || {};
+    return {
+      ok: true,
+      tracking: res.tracking_number || null,
+      labelUrl: dl.pdf || dl.href || dl.png || null,
+      price: res.shipment_cost ? Number(res.shipment_cost.amount) : (res.total_cost ? Number(res.total_cost.amount) : null),
+      carrier: 'UPS',
+      service: res.service_code || serviceCode,
+      raw: res,
+    };
+  }
+  const msg = (res && res.errors && res.errors[0] && res.errors[0].message) || (res && res.message) || `HTTP ${status}`;
+  return { ok: false, error: msg, raw: res };
+}
+
+module.exports = { loafItems, packagingItems, buildTestShipment, createShipments, tagShipment, getRates, buyLabelFromShipment, req, unitOz, WAREHOUSE_ID, SS_SERVICE_CODE, UPS_CARRIER_ID };

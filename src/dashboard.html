@@ -524,6 +524,7 @@ async function loadQueue(btn){
   if(!r.ok||d.error){box.innerHTML='<div class="errbox">'+esc(d.error||('HTTP '+r.status))+'</div>';return;}
   document.getElementById('sq_count').textContent=d.count+' order(s) in queue';
   document.getElementById('sq_mode').textContent=d.buyingEnabled?'LIVE — real postage':'DEMO — labels don’t buy postage yet';
+  window.__sqBuying=!!d.buyingEnabled;
   if(!d.count){box.innerHTML='<div class="muted" style="padding:10px">No orders waiting (needs paid, unfulfilled orders in the window).</div>';return;}
   let h='<table style="width:100%;border-collapse:collapse;font-size:12.5px;min-width:720px">';
   h+='<tr><th style="text-align:left;padding:6px 8px">Order</th><th style="text-align:left;padding:6px 8px">Customer</th><th style="text-align:left;padding:6px 8px">Destination</th><th style="text-align:right;padding:6px 8px">Wt</th><th style="text-align:left;padding:6px 8px">UPS lane</th><th style="text-align:left;padding:6px 8px">Dry ice</th><th style="text-align:left;padding:6px 8px">Status</th><th style="padding:6px 8px"></th></tr>';
@@ -537,8 +538,9 @@ async function loadQueue(btn){
    const shipped=o.shipped&&o.label&&o.label.source==='shipped';
    if(blocked){status='<span style="color:#a15a1a">⛔ '+esc(o.blocking[0]||'blocked')+'</span>';act='';}
    else if(shipped){status='<span style="color:#5a6b3a">🚚 shipped</span>'+(o.label.tracking?'<br><span style="font-family:monospace;font-size:11px">'+esc(o.label.tracking)+'</span>':'');act='';}
-   else if(o.label.printed){status='<span style="color:#2e7d32">✓ printed'+(o.label.reprints?' ('+o.label.reprints+'× reprint)':'')+'</span><br><span style="font-family:monospace;font-size:11px">'+esc(o.label.tracking)+'</span>';act='<button onclick="printLabel(\''+esc(o.number)+'\',true,this)" style="padding:6px 12px">Reprint</button>';}
-   else{status='<span class="muted">not printed</span>';act='<button onclick="printLabel(\''+esc(o.number)+'\',false,this)" style="padding:6px 12px">Print label</button>';}
+   else if(o.label.printed){const paid=o.label.demo===false;status='<span style="color:#2e7d32">✓ '+(paid?'bought':'printed')+(o.label.price!=null?' $'+o.label.price:'')+(o.label.reprints?' ('+o.label.reprints+'× reprint)':'')+'</span><br><span style="font-family:monospace;font-size:11px">'+esc(o.label.tracking)+'</span>';act=paid&&o.label.labelUrl?'<button onclick="reopenLabel(\''+esc(o.label.labelUrl)+'\')" style="padding:6px 12px">Reprint</button>':'<button onclick="printLabel(\''+esc(o.number)+'\',true,this)" style="padding:6px 12px">Reprint</button>';}
+   else if(window.__sqBuying){act='<button onclick="buyLabel(\''+esc(o.number)+'\',this)" style="padding:6px 12px;background:#2e7d32;color:#fff">Buy + email label</button>';status='<span class="muted">ready to buy</span>';}
+   else{status='<span class="muted">not printed</span>';act='<button onclick="printLabel(\''+esc(o.number)+'\',false,this)" style="padding:6px 12px">Print label (demo)</button>';}
    h+='<tr style="border-top:1px solid #ece0c8'+(blocked||shipped?';opacity:.6':'')+'"><td style="padding:6px 8px"><b>#'+esc(o.number)+'</b></td><td style="padding:6px 8px">'+esc(o.customer||'')+'</td><td style="padding:6px 8px">'+esc((o.city||'')+', '+(o.state||''))+'</td><td style="padding:6px 8px;text-align:right">'+o.weightLb+'#</td><td style="padding:6px 8px">'+esc(o.lane.service)+'<br><span class="tag" style="background:'+badge+';color:#fff">'+src+'</span></td><td style="padding:6px 8px">'+di+'</td><td style="padding:6px 8px">'+status+'</td><td style="padding:6px 8px;text-align:right;white-space:nowrap">'+act+(blocked?'':pick)+'</td></tr>';
   });
   h+='</table>';
@@ -555,6 +557,22 @@ async function printLabel(number,reprint,btn){
   if(w){w.document.open();w.document.write(html);w.document.close();}
   setTimeout(()=>loadQueue(),400);
  }catch(e){if(w)w.document.body.innerHTML='<pre>'+esc(e.message)+'</pre>';}finally{if(btn)btn.disabled=false;}
+}
+function reopenLabel(url){ if(url) window.open(url,'_blank'); }
+async function buyLabel(number,btn){
+ if(!confirm('Buy a REAL UPS label for #'+number+' and email it to Ice Cube? This spends money.'))return;
+ if(btn){btn.disabled=true;btn.textContent='Buying…';}
+ try{
+  const r=await fetch('?action=buylabel&number='+encodeURIComponent(number),{method:'POST'});
+  const d=await r.json().catch(()=>({error:'bad response'}));
+  if(r.status===409&&d.held){alert('HELD — '+d.reason+'. Not bought.');return;}
+  if(!r.ok||!d.ok){alert('Buy failed: '+(d.error||('HTTP '+r.status)));return;}
+  const b=d.bought||{};
+  const mailNote=d.mail&&d.mail.sent?('emailed '+(d.mail.to||[]).join(', ')):('EMAIL NOT SENT'+(d.mail&&d.mail.error?': '+d.mail.error:d.mail&&d.mail.skipped?' ('+d.mail.skipped+')':''));
+  alert('Bought #'+number+' — '+b.service+' — tracking '+(b.tracking||'(pending)')+(b.price!=null?' — $'+b.price:'')+'\n'+mailNote);
+  if(b.labelUrl)window.open(b.labelUrl,'_blank');
+  loadQueue();
+ }catch(e){alert('Buy error: '+e.message);}finally{if(btn){btn.disabled=false;btn.textContent='Buy + email label';}}
 }
 async function openPick(number,btn){
  if(btn)btn.disabled=true;

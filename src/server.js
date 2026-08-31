@@ -118,6 +118,16 @@ const saveLabel = (n, meta) => fs.writeFileSync(labelPath(n), JSON.stringify(met
 // always refused (no double charge). UPS ONLY — USPS is never offered/bought.
 const LABEL_BUYING_ENABLED = process.env.LABEL_BUYING === '1';
 const LABEL_MAX_USD = Number(process.env.LABEL_MAX_USD || 60);
+// Per-lane price ceilings (Justin 2026-08-30): a rate above the ceiling HOLDS the
+// order (no buy) so a mispriced label never silently ships. Ground/2-day is cheap
+// (ShipStation UPS Ground), air is pricier (Priority Shippers overnight/2nd day).
+const LABEL_MAX_GROUND_USD = Number(process.env.LABEL_MAX_GROUND_USD || 35);
+const LABEL_MAX_AIR_USD = Number(process.env.LABEL_MAX_AIR_USD || 80);
+const capForLane = (lane) => (lane && lane.mode === 'air' ? LABEL_MAX_AIR_USD : LABEL_MAX_GROUND_USD);
+// Ice Cube ops inbox(es) the bought label + pick list go to (mirrors the current
+// manual "email them the pack list + label pdf" step). Override via env.
+const LABEL_MAIL_TO = (process.env.LABEL_MAIL_TO || 'ecommops@icecubecoldstorage.com,muhammad@breadwrightbox.com')
+  .split(',').map((s) => s.trim()).filter(Boolean);
 
 // PENDING REVIEW STORE. The Shopify orders/paid webhook STAGES each raw order
 // here (it does NOT auto-send); the console lists them and the operator confirms
@@ -864,7 +874,7 @@ app.get('/peek/ship-queue', async (req, res) => {
       const shipTracking = (ful[0] && (ful[0].tracking_number || (ful[0].tracking_numbers || [])[0])) || null;
       const stored = getLabel(o.number);
       const label = stored
-        ? { printed: true, tracking: stored.tracking, service: stored.service, source: stored.source, price: stored.price, demo: !!stored.demo, printedAt: stored.printedAt, reprints: stored.reprints || 0 }
+        ? { printed: true, tracking: stored.tracking, service: stored.service, source: stored.source, price: stored.price, demo: !!stored.demo, labelUrl: stored.labelUrl || null, printedAt: stored.printedAt, reprints: stored.reprints || 0 }
         : (shipped ? { printed: true, shipped: true, tracking: shipTracking, service: lane.service, source: 'shipped', demo: false, reprints: 0 } : { printed: false });
       return {
         number: o.number,
@@ -999,21 +1009,122 @@ app.get('/peek/packslip', async (req, res) => {
   }
 });
 
-// The guarded REAL-buy path. Deliberately refuses until every guard passes so a
-// stray click can never spend money during the demo. Wire the create-label calls
-// (Priority Shippers / ShipStation v2) here ONLY after Justin funds an account +
-// flips LABEL_BUYING=1. UPS ONLY.
+// The guarded REAL-buy path. Buys ONE UPS label on the lane's carrier (ground/2-day
+// -> ShipStation UPS Ground/2nd Day; air -> Priority Shippers UPS Next Day/2nd Day),
+// enforces a per-lane price ceiling (over cap = HOLD, no charge), never double-buys,
+// then emails Ice Cube the label PDF + pick list (mirrors the manual flow). UPS ONLY.
 //   POST /peek/buy-label?key=<PEEK_KEY>&number=1038
 app.post('/peek/buy-label', async (req, res) => {
   if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
   const number = String(req.query.number || (req.body && req.body.number) || '').trim();
   if (!number) return res.status(400).json({ error: 'missing ?number=' });
   const existing = getLabel(number);
-  if (existing && !existing.demo) return res.status(409).json({ error: `order #${number} already has a paid label (${existing.tracking}); reprint instead — no double charge` });
-  if (!LABEL_BUYING_ENABLED) return res.status(403).json({ error: 'label BUYING is disabled (demo mode). Set LABEL_BUYING=1 + fund the account to enable real purchases.', guard: 'LABEL_BUYING' });
-  // Real purchase intentionally NOT wired yet — the guards above are the point.
-  return res.status(501).json({ error: 'real label buy not wired yet — pending funding-account decision', maxUsd: LABEL_MAX_USD });
+  if (existing && !existing.demo) return res.status(409).json({ error: `order #${number} already has a paid label (${existing.tracking}); reprint instead — no double charge`, label: existing });
+  if (!LABEL_BUYING_ENABLED) return res.status(403).json({ error: 'label BUYING is disabled. Set LABEL_BUYING=1 + fund the carrier account to enable real purchases.', guard: 'LABEL_BUYING' });
+
+  try {
+    let raw = (findPendingByNumber(number) || {}).raw;
+    if (!raw && process.env.SHOPIFY_ADMIN_TOKEN) raw = await fetchOrderRawByNumber(number);
+    if (!raw) return res.status(404).json({ error: `order #${number} not in queue` });
+    const order = normalizeOrder(raw);
+    const { pack, blocking } = buildCustomerOrder(order);
+    if (blocking && blocking.length) return res.status(409).json({ error: `order #${number} is blocked: ${blocking.join('; ')}`, blocking });
+
+    const lane = routeLane(order.serviceTier);
+    const cap = capForLane(lane);
+    const weightLb = estimateWeightLb(pack);
+    const dryIceLb = (pack.dryIceSlabs || 0) * (require('../config/materials').SLAB_LB || 5);
+    const s = order.shipping || {};
+    const to = {
+      name: s.accountName || order.number, phone: s.telephone || undefined,
+      address_1: s.addressLine1, address_2: s.addressLine2 || undefined,
+      city: s.city, state: s.state, zip: s.postalCode, country: s.country || 'US',
+      residential: true,
+    };
+    const packages = [{ weight: weightLb, length: 14, width: 14, height: 14 }];
+
+    let bought;
+    if (lane.source === 'priority_shippers') {
+      // Rate first so we can enforce the cap BEFORE buying, and pick the exact
+      // UPS service for the tier. dry ice declared on air (UN1845, 1 slab max).
+      const rated = await priority.getRates({ to, packages, dryIceLb });
+      if (!rated.ok) return res.status(502).json({ error: `Priority Shippers rate failed: ${rated.fail ? rated.fail.message : (rated.errors || []).join('; ')}`, raw: rated.raw });
+      const want = lane.service; // 'UPS Next Day Air' | 'UPS 2nd Day Air'
+      const match = rated.rates.find((r) => (r.service || '').toLowerCase() === want.toLowerCase())
+        || rated.rates.find((r) => (r.service || '').toLowerCase().includes(want.toLowerCase().replace('ups ', '')))
+        || rated.rates[0];
+      if (!match) return res.status(502).json({ error: 'no Priority Shippers rate returned', rates: rated.rates });
+      if (match.total > cap) return res.status(409).json({ held: true, reason: `rate $${match.total} exceeds ${lane.mode} cap $${cap}`, rate: match, cap });
+      const label = await priority.createLabel({ to, packages, dryIceLb, service_code: match.service_code });
+      if (!label.ok) return res.status(502).json({ error: `Priority Shippers buy failed: ${label.error}`, raw: label.raw });
+      bought = { source: 'priority_shippers', ...label, price: label.price != null ? label.price : match.total, service: label.service || match.service };
+    } else {
+      // ShipStation UPS ground/2nd-day on the Breadwright negotiated carrier.
+      const ss = require('./shipstation');
+      const { shipment } = ss.buildTestShipment({ ...order, serviceLevel: order.serviceLevel }, { test: false });
+      // buildTestShipment reads a legacy address shape; normalizeOrder uses
+      // accountName/addressLine1/... — set ship_to from the real fields so UPS
+      // gets a valid consignee.
+      shipment.ship_to = {
+        name: s.accountName || order.number, phone: s.telephone || '5085550100',
+        address_line1: s.addressLine1, address_line2: s.addressLine2 || '',
+        city_locality: s.city, state_province: s.state, postal_code: s.postalCode,
+        country_code: s.country || 'US', address_residential_indicator: 'yes',
+      };
+      const label = await ss.buyLabelFromShipment(shipment, { service: lane.service });
+      if (!label.ok) return res.status(502).json({ error: `ShipStation buy failed: ${label.error}`, raw: label.raw });
+      if (label.price != null && label.price > cap) {
+        return res.status(409).json({ held: true, reason: `bought rate $${label.price} exceeds ${lane.mode} cap $${cap} — VOID this label in ShipStation`, tracking: label.tracking, cap });
+      }
+      bought = { source: 'shipstation', ...label };
+    }
+
+    const meta = {
+      number, source: bought.source, carrier: 'UPS', service: bought.service,
+      tracking: bought.tracking, labelUrl: bought.labelUrl, price: bought.price,
+      demo: false, printedAt: new Date().toISOString(), reprints: 0,
+    };
+    saveLabel(number, meta);
+
+    // Email Ice Cube the label PDF + pick list (the manual step, automated).
+    let mail = { sent: false };
+    try { mail = await emailLabelToIceCube(order, pack, meta, lane); }
+    catch (e) { mail = { sent: false, error: e.message }; }
+
+    res.json({ ok: true, bought: meta, cap, weightLb, dryIceLb, mail });
+  } catch (e) {
+    console.error('[buy-label] FAILED:', e);
+    res.status(502).json({ error: e.message });
+  }
 });
+
+// Fetch the carrier label PDF and email it (base64 attachment) + the pick-list
+// HTML to Ice Cube ops. Falls back to a link if the PDF can't be fetched.
+async function emailLabelToIceCube(order, pack, meta, lane) {
+  const { sendMail } = require('./mailer');
+  const num = order.number;
+  const slip = packSlipHtml(pack, order);
+  const attachments = [];
+  if (meta.labelUrl) {
+    try {
+      const r = await fetch(meta.labelUrl);
+      if (r.ok) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        attachments.push({ filename: `label_${num}.pdf`, content: buf.toString('base64') });
+      }
+    } catch (_) { /* fall through to link */ }
+  }
+  const linkLine = meta.labelUrl && !attachments.length ? `\nLabel PDF: ${meta.labelUrl}` : '';
+  const subject = `Breadwright order #${num} — UPS label + pick list (${meta.service})`;
+  const text =
+    `Order #${num}\nShip to: ${(order.shipping || {}).accountName || ''}, ${(order.shipping || {}).city || ''} ${(order.shipping || {}).state || ''}\n` +
+    `Carrier: UPS ${meta.service} (${lane.source === 'priority_shippers' ? 'Priority Shippers' : 'ShipStation'})\n` +
+    `Tracking: ${meta.tracking || '(pending)'}\nCost: ${meta.price != null ? '$' + meta.price : 'n/a'}\n` +
+    `Dry ice: ${pack.dryIceSlabs || 0} slab(s)${pack.declareDryIce ? ' — DECLARED (air)' : ''}.` +
+    `${linkLine}\n\nPick list is attached/below.`;
+  const html = `<p>Order <b>#${num}</b> — UPS ${meta.service} — tracking <b>${meta.tracking || '(pending)'}</b>${meta.labelUrl ? ` — <a href="${meta.labelUrl}">label PDF</a>` : ''}</p>` + slip;
+  return sendMail({ to: LABEL_MAIL_TO, subject, text, html, attachments });
+}
 
 // A printable 4x6 UPS-style DEMO label. Big service banner, ship-from/ship-to,
 // Code 128 barcode of the tracking, and an unmissable DEMO watermark so nobody
