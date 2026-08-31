@@ -441,6 +441,26 @@ app.post('/peek/dryice', async (req, res) => {
   }
 });
 
+// Dry Ice MODEL (BW_Dry_Ice_Build_Spec v0.1) — physics-based per-service verdict.
+// ADVISORY ONLY: with placeholder params (R0 etc. uncalibrated, spec §7) its slab
+// counts disagree with live ops (0-slab near ground), so it does NOT drive the
+// live lane/label routing yet — it shows all four services + a recommendation +
+// the ship/upgrade/do-not-ship verdict + the §8 pack-list reasoning block.
+// Read-only, unblocked (manual zip in). POST /peek/dryice-model {zip,shipDate?,payloadLb?,butter?}
+app.post('/peek/dryice-model', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  const { zip, shipDate, payloadLb, butter } = req.body || {};
+  if (!zip) return res.status(400).json({ error: 'zip required' });
+  try {
+    const model = require('../config/dryiceModel');
+    const result = await model.evaluate({ zip, shipDate: shipDate || undefined, payloadLb: payloadLb != null ? Number(payloadLb) : undefined, butter: !!butter });
+    res.json({ ok: true, advisory: true, params: model.PARAMS, ...result });
+  } catch (e) {
+    console.error('[dryice-model] FAILED:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Priority Shippers (Yahuda) live rate compare — the CHEAPEST-lane picker that
 // replaces ShipStation. Read-only: calls get-rates only (no label bought). Works
 // from a MANUAL address+weight (like /peek/dryice), so it is NOT blocked by the
