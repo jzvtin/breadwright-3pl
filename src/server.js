@@ -647,7 +647,7 @@ app.post('/peek/poll-now', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// NIGHTLY APPROVAL GATE — ~9pm prepares + emails Sam a link, ~5am sends ONLY
+// NIGHTLY APPROVAL GATE — ~9pm prepares + emails Sam a link, ~4:30am sends ONLY
 // if he clicked Approve (see src/nightlyApproval.js). Auth is the per-date
 // random token embedded in the email link, not PEEK_KEY — Sam isn't an
 // operator. A simple GET so it works as a one-click email link.
@@ -707,13 +707,25 @@ app.get('/nightly/preview', (req, res) => {
   const blockedHtml = meta.blocked.length
     ? `<h3>Blocked (${meta.blocked.length}, not included)</h3><ul>${meta.blocked.map((b) => `<li>#${esc(b.number)}: ${esc(b.reasons.join('; '))}</li>`).join('')}</ul>`
     : '';
+  const summaryHtml = (meta.summaryLines || []).length
+    ? `<h3>Orders (plain English)</h3><ul>${meta.summaryLines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>`
+    : '';
+  const approveUrl = `/nightly/approve?date=${date}&token=${esc(meta.token)}`;
+  const rejectUrl = `/nightly/reject?date=${date}&token=${esc(meta.token)}`;
+  const actionsHtml = meta.status === 'pending' && tokenOk
+    ? `<p><a href="${approveUrl}" style="color:#2a2;font-weight:700">APPROVE</a> &nbsp; <a href="${rejectUrl}" style="color:#a33;font-weight:700">REJECT</a></p>`
+    : '';
   res.type('html').send(
     `<!doctype html><meta charset="utf-8"><title>Nightly batch ${esc(date)}</title>` +
-    `<style>body{font:14px/1.5 -apple-system,Segoe UI,Arial;max-width:900px;margin:30px auto;padding:0 20px}pre{white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:6px;font-size:12px}</style>` +
+    `<style>body{font:14px/1.5 -apple-system,Segoe UI,Arial;max-width:900px;margin:30px auto;padding:0 20px}pre{white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:6px;font-size:12px}details{margin-top:20px}</style>` +
     `<h1>Breadwright nightly batch — ${esc(date)}</h1>` +
-    `<p>Status: <b>${esc(meta.status)}</b> · ${esc(String(meta.sendable))} order(s) · ${esc(String(meta.files.length))} file(s)</p>` +
+    `<p>Status: <b>${esc(meta.status)}</b> · ${esc(String(meta.sendable))} order(s)</p>` +
+    actionsHtml +
+    summaryHtml +
     blockedHtml +
-    xmls.map((x, i) => `<h3>${esc(meta.files[i].filename)}</h3><pre>${esc(x)}</pre>`).join('')
+    `<details><summary>Raw XML (technical)</summary>` +
+    xmls.map((x, i) => `<h3>${esc(meta.files[i].filename)}</h3><pre>${esc(x)}</pre>`).join('') +
+    `</details>`
   );
 });
 

@@ -7,7 +7,7 @@
  *      batch XML (same buildBatchChunks as batch.js), does NOT touch SFTP.
  *      Writes it to out/.nightly/<date>/ and emails Muhammad ("Sam") an
  *      approve/reject link pair. Status starts 'pending'.
- *   2. sendNightly()     ~5am — reads that day's record. Only SFTP-drops +
+ *   2. sendNightly()     ~4:30am — reads that day's record. Only SFTP-drops +
  *      tags-sent if status === 'approved' (Sam clicked Approve). Anything else
  *      (pending/rejected/missing) is a NO-SEND, with an alert email explaining
  *      why so it never fails silently.
@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { normalizeOrder, fetchOrdersForBatch, tagOrderSent } = require('./shopify');
-const { buildBatchChunks, buildOrderNode } = require('./xml/buildOrder');
+const { buildBatchChunks, buildCustomerOrder } = require('./xml/buildOrder');
 const { putXml, DRY_RUN } = require('./sftp');
 const { sendMail } = require('./mailer');
 
@@ -49,6 +49,20 @@ function writeMeta(date, meta) {
   fs.writeFileSync(metaPath(date), JSON.stringify(meta, null, 2));
 }
 
+// Plain-English service tier — Sam reviews this, not Datex/Priority-Shippers codes.
+const TIER_LABEL = { '1_DAY': 'Ground (1 day)', '2_DAY': 'Ground (2 day)', '3_DAY': 'Ground (3 day)', '1_AIR': 'Overnight Air', '2_AIR': '2nd Day Air' };
+function tierLabel(tier) { return TIER_LABEL[tier] || tier || 'Ground'; }
+
+/** One human-readable line per order for the approval email — no XML, no material codes. */
+function orderSummaryLine(order, pack) {
+  const s = order.shipping || {};
+  const dest = [s.city, s.state].filter(Boolean).join(', ');
+  const dry = pack && pack.dryIceSlabs
+    ? `, dry ice: ${pack.dryIceSlabs} slab${pack.dryIceSlabs === 1 ? '' : 's'}${pack.declareDryIce ? ' (declared)' : ''}`
+    : '';
+  return `#${order.number} — ${s.accountName || 'customer'} (${dest || 'no city'}) — ${tierLabel(order.serviceTier)}${dry}`;
+}
+
 /** Phase 1 (~9pm): build the batch, stage it, email Sam for approval. Never sends. */
 async function prepareNightly({ now = new Date(), windowHours = 25 } = {}) {
   const date = dateStamp(now);
@@ -61,18 +75,24 @@ async function prepareNightly({ now = new Date(), windowHours = 25 } = {}) {
   const orders = [];
   const sendRaws = [];
   const blocked = [];
+  const summaryLines = [];
   allOrders.forEach((order, i) => {
     let b = [];
-    try { b = buildOrderNode(order).blocking || []; } catch (e) { b = ['build error: ' + e.message]; }
+    let pack = null;
+    try {
+      const built = buildCustomerOrder(order);
+      b = built.blocking || [];
+      pack = built.pack;
+    } catch (e) { b = ['build error: ' + e.message]; }
     if (b.length) blocked.push({ number: order.number, reasons: b });
-    else { orders.push(order); sendRaws.push(raws[i]); }
+    else { orders.push(order); sendRaws.push(raws[i]); summaryLines.push(orderSummaryLine(order, pack)); }
   });
 
   const token = crypto.randomBytes(16).toString('hex');
   const meta = {
     date, builtAt: now.toISOString(), windowHours, token,
     status: 'pending', decidedAt: null, decidedBy: null,
-    count: allOrders.length, sendable: orders.length, blocked,
+    count: allOrders.length, sendable: orders.length, blocked, summaryLines,
     files: [], sendRawsFile: 'raws.json',
   };
 
@@ -105,10 +125,11 @@ async function prepareNightly({ now = new Date(), windowHours = 25 } = {}) {
     ? `\n\n${blocked.length} order(s) BLOCKED (not included, need a fix):\n` + blocked.map((b) => `#${b.number}: ${b.reasons.join('; ')}`).join('\n')
     : '';
   const text =
-    `Tonight's Breadwright batch is ready: ${meta.sendable} order(s) across ${meta.files.length} file(s).\n\n` +
-    `Review it, then click ONE:\n\nAPPROVE (sends at 5am):\n${approveUrl}\n\nREJECT (holds, will NOT send):\n${rejectUrl}\n\n` +
-    `View the XML first:\n${previewUrl}\n\n` +
-    `If nobody clicks Approve by 5am, this batch will NOT be sent to Ice Cube.` +
+    `Tonight's Breadwright batch is ready: ${meta.sendable} order(s).\n\n` +
+    summaryLines.join('\n') + '\n\n' +
+    `Review it, then click ONE:\n\nAPPROVE (sends at 4:30am):\n${approveUrl}\n\nREJECT (holds, will NOT send):\n${rejectUrl}\n\n` +
+    `Full detail (plain-English list + raw XML):\n${previewUrl}\n\n` +
+    `If nobody clicks Approve by 4:30am, this batch will NOT be sent to Ice Cube.` +
     blockedText;
   const email = await sendMail({
     to: APPROVAL_TO,
@@ -134,13 +155,13 @@ function decide(date, token, decision, by) {
   return { ok: true, meta };
 }
 
-/** Phase 2 (~5am): send ONLY if approved. Never sends on pending/rejected/missing. */
+/** Phase 2 (~4:30am): send ONLY if approved. Never sends on pending/rejected/missing. */
 async function sendNightly({ now = new Date() } = {}) {
   const date = dateStamp(now);
   const meta = readMeta(date);
 
   if (!meta) {
-    await sendMail({ to: ALERT_TO, subject: `Breadwright 3PL — NOTHING PREPARED for ${date}`, text: `5am send job ran but no batch was prepared for ${date} (9pm prepare step may have failed). Nothing was sent.` });
+    await sendMail({ to: ALERT_TO, subject: `Breadwright 3PL — NOTHING PREPARED for ${date}`, text: `4:30am send job ran but no batch was prepared for ${date} (9pm prepare step may have failed). Nothing was sent.` });
     return { ok: false, sent: false, reason: 'no_meta', date };
   }
   if (meta.status === 'no_orders') return { ok: true, sent: false, reason: 'no_orders', date };
@@ -149,7 +170,7 @@ async function sendNightly({ now = new Date() } = {}) {
       to: ALERT_TO,
       subject: `Breadwright 3PL — batch NOT sent (${date}, status: ${meta.status})`,
       text: `${meta.sendable} order(s) were staged for ${date} but status is "${meta.status}" (not "approved") at send time — HELD, nothing dropped to Ice Cube.` +
-        (meta.status === 'pending' ? `\n\nNobody clicked Approve/Reject before 5am.` : ''),
+        (meta.status === 'pending' ? `\n\nNobody clicked Approve/Reject before 4:30am.` : ''),
     });
     return { ok: true, sent: false, reason: meta.status, date };
   }
