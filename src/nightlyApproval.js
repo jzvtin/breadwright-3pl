@@ -165,6 +165,10 @@ async function sendNightly({ now = new Date() } = {}) {
     return { ok: false, sent: false, reason: 'no_meta', date };
   }
   if (meta.status === 'no_orders') return { ok: true, sent: false, reason: 'no_orders', date };
+  // Two triggers can fire close together (e.g. GitHub Actions + a redundant
+  // DreamHost cron) — a prior run already sent it, so quietly no-op instead
+  // of double-dropping to SFTP or firing a false "NOT sent" alarm.
+  if (meta.status === 'sent') return { ok: true, sent: false, reason: 'already_sent', date, dropped: meta.dropped };
   if (meta.status !== 'approved') {
     await sendMail({
       to: ALERT_TO,
