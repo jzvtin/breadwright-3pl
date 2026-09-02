@@ -1,0 +1,47 @@
+name: Breadwright nightly batch
+
+# Triggers the approval-gated nightly batch on the always-on Railway service
+# (see src/nightlyApproval.js / CLAUDE.md "Approval-gated nightly send").
+# Alternative to Railway's dashboard-only cron-schedule field — this repo
+# already has push access via CLI, so scheduling lives here instead.
+#
+# 9pm ET  -> stage the batch + email Sam an approve/reject link
+# 4:30am ET -> send via SFTP ONLY if Sam approved (30 min margin before Bill's
+#              5am cutoff)
+#
+# GitHub Actions cron is UTC and does not shift for DST. Two schedules below
+# cover EDT (Mar-Nov); flip to the EST pair (commented) manually each winter,
+# or just accept the 1hr drift for a few weeks.
+on:
+  schedule:
+    - cron: '0 1 * * *'   # 9pm EDT (next-day UTC)   | EST: '0 2 * * *'
+    - cron: '30 8 * * *'  # 4:30am EDT               | EST: '30 9 * * *'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'prepare or send'
+        required: true
+        type: choice
+        options: [prepare, send]
+
+env:
+  TARGET: https://breadwright-3pl-production.up.railway.app
+
+jobs:
+  prepare:
+    if: github.event.schedule == '0 1 * * *' || (github.event_name == 'workflow_dispatch' && inputs.action == 'prepare')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stage batch + email Sam
+        run: |
+          curl -sS -f -X POST "$TARGET/nightly/prepare?key=${{ secrets.PEEK_KEY }}" | tee result.json
+        shell: bash
+
+  send:
+    if: github.event.schedule == '30 8 * * *' || (github.event_name == 'workflow_dispatch' && inputs.action == 'send')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send if approved
+        run: |
+          curl -sS -f -X POST "$TARGET/nightly/send?key=${{ secrets.PEEK_KEY }}" | tee result.json
+        shell: bash
