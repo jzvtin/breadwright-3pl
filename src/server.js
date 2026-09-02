@@ -679,6 +679,20 @@ app.post('/nightly/send', async (req, res) => {
   }
 });
 
+// One-time repair: patch orderDetails onto an already-staged batch (schema
+// added after it was prepared) WITHOUT touching status/token — so an
+// in-flight approve/reject decision or an already-sent email link survives.
+app.post('/nightly/backfill', (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const result = require('./nightlyApproval').backfillOrderDetails(String(req.query.date || ''));
+    res.json(result);
+  } catch (e) {
+    console.error('[nightly/backfill] FAILED:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/nightly/approve', (req, res) => {
   const { decide } = require('./nightlyApproval');
   const r = decide(String(req.query.date || ''), String(req.query.token || ''), 'approved', req.query.by || 'email-link');

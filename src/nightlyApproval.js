@@ -159,6 +159,29 @@ async function prepareNightly({ now = new Date(), windowHours = 25 } = {}) {
   return meta;
 }
 
+/**
+ * One-time repair for a batch staged BEFORE orderDetails existed in the meta
+ * schema (e.g. shipped this feature after tonight's batch was already
+ * pending) — recomputes orderDetails from the already-staged raws.json
+ * WITHOUT touching status/token/decidedBy, so an in-flight approval/reject
+ * decision (or Sam's already-emailed link) is never disturbed.
+ */
+function backfillOrderDetails(date) {
+  const meta = readMeta(date);
+  if (!meta) return { ok: false, error: `no batch prepared for ${date}` };
+  if (meta.orderDetails && meta.orderDetails.length) return { ok: true, skipped: 'already has orderDetails', meta };
+  const sendRaws = JSON.parse(fs.readFileSync(path.join(dayDir(date), 'raws.json'), 'utf8'));
+  const orderDetails = sendRaws.map((raw) => {
+    const order = normalizeOrder(raw);
+    let pack = null;
+    try { pack = buildCustomerOrder(order).pack; } catch (_) { /* leave pack null — order already passed the blocking screen at prepare time */ }
+    return orderDetail(order, pack);
+  });
+  meta.orderDetails = orderDetails;
+  writeMeta(date, meta);
+  return { ok: true, meta };
+}
+
 /** Record Sam's (or anyone with the token's) decision. Idempotent-ish: last click wins pre-send. */
 function decide(date, token, decision, by) {
   const meta = readMeta(date);
@@ -240,4 +263,4 @@ async function sendNightly({ now = new Date() } = {}) {
   return { ok: true, sent: true, date, dropped, tagged, tagErrors, audit };
 }
 
-module.exports = { prepareNightly, sendNightly, decide, readMeta, dateStamp };
+module.exports = { prepareNightly, sendNightly, decide, readMeta, dateStamp, backfillOrderDetails };
