@@ -106,6 +106,59 @@ railway up --detach       # redeploy (also auto-deploys on git push if GitHub-li
 - **Scheduling (Justin, in Railway):** add a 2nd service from this repo with
   startCommand `npm run batch` and Cron Schedule `0 4 * * *` (= 00:00 EDT; use `0 5 * * *`
   in winter/EST). Or point any external cron at `POST /batch/run?key=<PEEK_KEY>`.
+  This is the direct-send path — no human gate. For the approval-gated path below,
+  do NOT also run this one on the same schedule (double-send risk).
+
+## Approval-gated nightly send (Sam approves before it ships) — 2026-09-02
+- **Problem this solves:** the plain `npm run batch` above sends straight to
+  Ice Cube with zero human check. Muhammad ("Sam") wants to see + approve the
+  night's batch before it goes out. This is the LIVE path now — Bill's review
+  test-drop (`/Datex/Import/Test`) passed 2026-09-02; production dirs are
+  `/Datex/Import/Prod` (we drop orders) / `/Datex/Export/Prod` (Bill drops
+  ship-confirmations, polled every 20 min — `POLL_INTERVAL_MS=1200000`,
+  `POLL_CONFIRMATIONS=1`, both set on `breadwright-3pl`).
+- **Architecture: all real state + secrets live on the ONE always-on
+  `breadwright-3pl` service.** The 2 cron services below hold NO secrets and
+  NO disk state of their own — Railway cron services get a fresh ephemeral
+  container per run, so if `nightly:prepare` and `nightly:send` ran as
+  separate standalone scripts on 2 different cron services, `send` would
+  never see the files `prepare` wrote (learned this the hard way before
+  shipping it — original design had this bug). Fixed: the 2 cron services
+  just POST to endpoints on the main service (`src/cli/cron-hit.js`, env
+  `TARGET_URL`); the main service's `src/nightlyApproval.js` does the real
+  work against its own `out/.nightly/<date>/` disk.
+  - **Railway service `breadwright-nightly-prepare`** — `TARGET_URL` =
+    `https://breadwright-3pl-production.up.railway.app/nightly/prepare?key=<PEEK_KEY>`,
+    startCommand `npm run cron:hit`, Cron Schedule **9pm** ET.
+  - **Railway service `breadwright-nightly-send`** — `TARGET_URL` = same host,
+    `/nightly/send?key=<PEEK_KEY>`, startCommand `npm run cron:hit`, Cron
+    Schedule **4:30am** ET (30 min before Bill's 5am cutoff — margin, not the
+    cutoff itself).
+  - Cron UTC, EDT (UTC-4): 9pm = `0 1 * * *` (next day), 4:30am = `30 8 * * *`.
+    Winter/EST (UTC-5): 9pm = `0 2 * * *`, 4:30am = `30 9 * * *`.
+- **Flow on `breadwright-3pl`, `src/nightlyApproval.js` +
+  `POST /nightly/prepare`/`POST /nightly/send` (PEEK_KEY-gated):**
+  1. **9pm `prepareNightly()`** — pulls today's sendable orders, builds the
+     XML, stages it to `out/.nightly/<YYYYMMDD>/` (does **not** touch SFTP),
+     emails Sam (+ Justin cc) an Approve link, a Reject link, and a Preview
+     link (`GET /nightly/approve|reject|preview?date=&token=`, token random
+     per-date, no login needed — Sam just clicks from the email).
+  2. **4:30am `sendNightly()`** — reads that day's record. Sends via SFTP to
+     `/Datex/Import/Prod` + tags `3pl-sent` **only if** status is `approved`.
+     If nobody clicked (still `pending`) or Sam clicked Reject, it does
+     **not** send — emails an alert explaining why instead. Missing prep
+     record (9pm job failed) also alerts instead of silently doing nothing.
+  - Env (on `breadwright-3pl`): `NIGHTLY_APPROVAL_TO` (who gets the approve
+    link, default Sam+Justin), `NIGHTLY_ALERT_TO` (no-send/failure alerts,
+    defaults to the same), `PUBLIC_BASE_URL` (default `https://api.breadwright.com`,
+    used to build the email links Sam clicks — must be reachable from his
+    inbox, not the internal Railway URL).
+  - Uses the same blocked-order screen as `runBatch` (Entertainer box, null-Datex
+    add-ons, etc. never reach the XML even if approved).
+  - **⚠️ `DRY_RUN` still gates the actual SFTP write** — if `DRY_RUN=1` on
+    `breadwright-3pl`, an approved batch writes to local `out/` instead of
+    hitting Ice Cube for real. Flip to `DRY_RUN=0` only when Justin explicitly
+    says go-live for real orders (separate decision from "dirs point at Prod").
 - **CONFIRM w/ Bill:** does the import accept many `<Order>` in one file? If they want
   one file per order, set env `BATCH_MODE=per-order` (drops individually, same run).
 - **Scopes needed on the custom app:** `read_orders` (pull) + `write_orders` (tag sent).

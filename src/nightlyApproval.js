@@ -1,0 +1,190 @@
+/**
+ * src/nightlyApproval.js
+ * APPROVAL-GATED NIGHTLY BATCH — replaces straight-to-SFTP `runBatch` for the
+ * unattended schedule. Two phases, run by two separate crons:
+ *
+ *   1. prepareNightly()  ~9pm — pulls today's sendable orders, builds the Datex
+ *      batch XML (same buildBatchChunks as batch.js), does NOT touch SFTP.
+ *      Writes it to out/.nightly/<date>/ and emails Muhammad ("Sam") an
+ *      approve/reject link pair. Status starts 'pending'.
+ *   2. sendNightly()     ~5am — reads that day's record. Only SFTP-drops +
+ *      tags-sent if status === 'approved' (Sam clicked Approve). Anything else
+ *      (pending/rejected/missing) is a NO-SEND, with an alert email explaining
+ *      why so it never fails silently.
+ *
+ * Decision is recorded via a random per-date token embedded in the email links
+ * (GET /nightly/approve|reject?date=&token=) — no login needed for Sam.
+ */
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { normalizeOrder, fetchOrdersForBatch, tagOrderSent } = require('./shopify');
+const { buildBatchChunks, buildOrderNode } = require('./xml/buildOrder');
+const { putXml, DRY_RUN } = require('./sftp');
+const { sendMail } = require('./mailer');
+
+const NIGHTLY_DIR = path.join(__dirname, '../out/.nightly');
+fs.mkdirSync(NIGHTLY_DIR, { recursive: true });
+
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://api.breadwright.com';
+// Sam (Muhammad) approves; Justin stays cc'd so a missed click doesn't go unnoticed.
+const APPROVAL_TO = (process.env.NIGHTLY_APPROVAL_TO || 'muhammad@breadwrightbox.com,j@dynaradigital.com')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+const ALERT_TO = (process.env.NIGHTLY_ALERT_TO || APPROVAL_TO.join(',')).split(',').map((s) => s.trim()).filter(Boolean);
+
+function dateStamp(now) {
+  return now.toISOString().slice(0, 10).replace(/-/g, '');
+}
+function dayDir(date) {
+  return path.join(NIGHTLY_DIR, date);
+}
+function metaPath(date) {
+  return path.join(dayDir(date), 'meta.json');
+}
+function readMeta(date) {
+  try { return JSON.parse(fs.readFileSync(metaPath(date), 'utf8')); } catch (_) { return null; }
+}
+function writeMeta(date, meta) {
+  fs.mkdirSync(dayDir(date), { recursive: true });
+  fs.writeFileSync(metaPath(date), JSON.stringify(meta, null, 2));
+}
+
+/** Phase 1 (~9pm): build the batch, stage it, email Sam for approval. Never sends. */
+async function prepareNightly({ now = new Date(), windowHours = 25 } = {}) {
+  const date = dateStamp(now);
+  const existing = readMeta(date);
+  if (existing) return { ...existing, skipped: 'already prepared for ' + date };
+
+  const raws = await fetchOrdersForBatch({ windowHours, now });
+  const allOrders = raws.map((o) => normalizeOrder(o, now));
+
+  const orders = [];
+  const sendRaws = [];
+  const blocked = [];
+  allOrders.forEach((order, i) => {
+    let b = [];
+    try { b = buildOrderNode(order).blocking || []; } catch (e) { b = ['build error: ' + e.message]; }
+    if (b.length) blocked.push({ number: order.number, reasons: b });
+    else { orders.push(order); sendRaws.push(raws[i]); }
+  });
+
+  const token = crypto.randomBytes(16).toString('hex');
+  const meta = {
+    date, builtAt: now.toISOString(), windowHours, token,
+    status: 'pending', decidedAt: null, decidedBy: null,
+    count: allOrders.length, sendable: orders.length, blocked,
+    files: [], sendRawsFile: 'raws.json',
+  };
+
+  if (!orders.length) {
+    meta.status = 'no_orders';
+    writeMeta(date, meta);
+    await sendMail({
+      to: ALERT_TO,
+      subject: `Breadwright 3PL — no orders to batch tonight (${date})`,
+      text: `No sendable orders in the ${windowHours}h window for ${date}.` +
+        (blocked.length ? `\n\n${blocked.length} order(s) BLOCKED and skipped:\n` + blocked.map((b) => `#${b.number}: ${b.reasons.join('; ')}`).join('\n') : ''),
+    });
+    return meta;
+  }
+
+  const chunks = buildBatchChunks(orders);
+  fs.mkdirSync(dayDir(date), { recursive: true });
+  chunks.forEach((c, i) => {
+    const filename = `part-${i + 1}.xml`;
+    fs.writeFileSync(path.join(dayDir(date), filename), c.xml, 'utf8');
+    meta.files.push({ filename, count: c.count, warnings: c.warnings });
+  });
+  fs.writeFileSync(path.join(dayDir(date), 'raws.json'), JSON.stringify(sendRaws));
+  writeMeta(date, meta);
+
+  const approveUrl = `${PUBLIC_BASE_URL}/nightly/approve?date=${date}&token=${token}`;
+  const rejectUrl = `${PUBLIC_BASE_URL}/nightly/reject?date=${date}&token=${token}`;
+  const previewUrl = `${PUBLIC_BASE_URL}/nightly/preview?date=${date}&token=${token}`;
+  const blockedText = blocked.length
+    ? `\n\n${blocked.length} order(s) BLOCKED (not included, need a fix):\n` + blocked.map((b) => `#${b.number}: ${b.reasons.join('; ')}`).join('\n')
+    : '';
+  const text =
+    `Tonight's Breadwright batch is ready: ${meta.sendable} order(s) across ${meta.files.length} file(s).\n\n` +
+    `Review it, then click ONE:\n\nAPPROVE (sends at 5am):\n${approveUrl}\n\nREJECT (holds, will NOT send):\n${rejectUrl}\n\n` +
+    `View the XML first:\n${previewUrl}\n\n` +
+    `If nobody clicks Approve by 5am, this batch will NOT be sent to Ice Cube.` +
+    blockedText;
+  const email = await sendMail({
+    to: APPROVAL_TO,
+    subject: `Approve Breadwright 3PL batch — ${date} — ${meta.sendable} order(s)`,
+    text,
+  });
+  meta.notified = email;
+  writeMeta(date, meta);
+  console.log(`[nightly] prepared ${date}: ${meta.sendable} order(s), ${meta.files.length} file(s), notified=${JSON.stringify(email)}`);
+  return meta;
+}
+
+/** Record Sam's (or anyone with the token's) decision. Idempotent-ish: last click wins pre-send. */
+function decide(date, token, decision, by) {
+  const meta = readMeta(date);
+  if (!meta) return { ok: false, error: `no batch prepared for ${date}` };
+  if (meta.token !== token) return { ok: false, error: 'bad token' };
+  if (meta.status === 'sent') return { ok: false, error: 'already sent — too late to change' };
+  meta.status = decision;
+  meta.decidedAt = new Date().toISOString();
+  meta.decidedBy = by || 'link-click';
+  writeMeta(date, meta);
+  return { ok: true, meta };
+}
+
+/** Phase 2 (~5am): send ONLY if approved. Never sends on pending/rejected/missing. */
+async function sendNightly({ now = new Date() } = {}) {
+  const date = dateStamp(now);
+  const meta = readMeta(date);
+
+  if (!meta) {
+    await sendMail({ to: ALERT_TO, subject: `Breadwright 3PL — NOTHING PREPARED for ${date}`, text: `5am send job ran but no batch was prepared for ${date} (9pm prepare step may have failed). Nothing was sent.` });
+    return { ok: false, sent: false, reason: 'no_meta', date };
+  }
+  if (meta.status === 'no_orders') return { ok: true, sent: false, reason: 'no_orders', date };
+  if (meta.status !== 'approved') {
+    await sendMail({
+      to: ALERT_TO,
+      subject: `Breadwright 3PL — batch NOT sent (${date}, status: ${meta.status})`,
+      text: `${meta.sendable} order(s) were staged for ${date} but status is "${meta.status}" (not "approved") at send time — HELD, nothing dropped to Ice Cube.` +
+        (meta.status === 'pending' ? `\n\nNobody clicked Approve/Reject before 5am.` : ''),
+    });
+    return { ok: true, sent: false, reason: meta.status, date };
+  }
+
+  const sendRaws = JSON.parse(fs.readFileSync(path.join(dayDir(date), 'raws.json'), 'utf8'));
+  const dropped = [];
+  for (const f of meta.files) {
+    const xml = fs.readFileSync(path.join(dayDir(date), f.filename), 'utf8');
+    const remoteName = `BW_${date}-cust order${meta.files.length > 1 ? '-' + (dropped.length + 1) : ''}.xml`;
+    const put = await putXml(remoteName, xml);
+    dropped.push({ filename: remoteName, count: f.count, ...put });
+  }
+
+  const tagged = [];
+  const tagErrors = [];
+  if (!DRY_RUN) {
+    for (const o of sendRaws) {
+      try { await tagOrderSent(o.id); tagged.push(o.id); }
+      catch (e) { tagErrors.push({ id: o.id, error: e.message }); }
+    }
+  }
+
+  meta.status = 'sent';
+  meta.sentAt = now.toISOString();
+  meta.dropped = dropped;
+  writeMeta(date, meta);
+
+  await sendMail({
+    to: ALERT_TO,
+    subject: `Breadwright 3PL batch SENT — ${date} — ${meta.sendable} order(s)`,
+    text: `Approved by ${meta.decidedBy} at ${meta.decidedAt}. Sent ${dropped.length} file(s), ${meta.sendable} order(s) to Ice Cube.` +
+      (tagErrors.length ? `\n\n${tagErrors.length} Shopify tag-sent failure(s): ` + JSON.stringify(tagErrors) : ''),
+  });
+  console.log(`[nightly] sent ${date}: ${JSON.stringify(dropped)}`);
+  return { ok: true, sent: true, date, dropped, tagged, tagErrors };
+}
+
+module.exports = { prepareNightly, sendNightly, decide, readMeta, dateStamp };

@@ -646,6 +646,77 @@ app.post('/peek/poll-now', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// NIGHTLY APPROVAL GATE — ~9pm prepares + emails Sam a link, ~5am sends ONLY
+// if he clicked Approve (see src/nightlyApproval.js). Auth is the per-date
+// random token embedded in the email link, not PEEK_KEY — Sam isn't an
+// operator. A simple GET so it works as a one-click email link.
+// ---------------------------------------------------------------------------
+// Cron trigger endpoints — the 2 Railway cron services just hit these (they
+// have NO local state and NO secrets of their own). ALL nightly file state
+// (out/.nightly/<date>/) lives on THIS always-on service's disk, so prepare
+// (~9pm) and send (~4:30am) always see the same files no matter which
+// container's clock fired the cron.
+app.post('/nightly/prepare', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const meta = await require('./nightlyApproval').prepareNightly();
+    res.json({ ok: true, ...meta });
+  } catch (e) {
+    console.error('[nightly/prepare] FAILED:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/nightly/send', async (req, res) => {
+  if (!PEEK_KEY || req.query.key !== PEEK_KEY) return res.status(401).json({ error: 'unauthorized' });
+  try {
+    const result = await require('./nightlyApproval').sendNightly();
+    res.json(result);
+  } catch (e) {
+    console.error('[nightly/send] FAILED:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/nightly/approve', (req, res) => {
+  const { decide } = require('./nightlyApproval');
+  const r = decide(String(req.query.date || ''), String(req.query.token || ''), 'approved', req.query.by || 'email-link');
+  if (!r.ok) return res.status(400).type('html').send(`<p>${esc(r.error)}</p>`);
+  res.type('html').send(`<p>Approved — ${esc(String(r.meta.sendable))} order(s) for ${esc(r.meta.date)} will send at 4:30am.</p>`);
+});
+
+app.get('/nightly/reject', (req, res) => {
+  const { decide } = require('./nightlyApproval');
+  const r = decide(String(req.query.date || ''), String(req.query.token || ''), 'rejected', req.query.by || 'email-link');
+  if (!r.ok) return res.status(400).type('html').send(`<p>${esc(r.error)}</p>`);
+  res.type('html').send(`<p>Rejected — tonight's batch for ${esc(r.meta.date)} will NOT be sent.</p>`);
+});
+
+app.get('/nightly/preview', (req, res) => {
+  const { readMeta } = require('./nightlyApproval');
+  const date = String(req.query.date || '');
+  const meta = readMeta(date);
+  if (!meta) return res.status(404).type('html').send('<p>no batch prepared for that date</p>');
+  const tokenOk = meta.token === req.query.token;
+  const keyOk = PEEK_KEY && req.query.key === PEEK_KEY;
+  if (!tokenOk && !keyOk) return res.status(401).type('html').send('<p>unauthorized</p>');
+  const path = require('path');
+  const fs = require('fs');
+  const xmls = meta.files.map((f) => fs.readFileSync(path.join(__dirname, '../out/.nightly', date, f.filename), 'utf8'));
+  const blockedHtml = meta.blocked.length
+    ? `<h3>Blocked (${meta.blocked.length}, not included)</h3><ul>${meta.blocked.map((b) => `<li>#${esc(b.number)}: ${esc(b.reasons.join('; '))}</li>`).join('')}</ul>`
+    : '';
+  res.type('html').send(
+    `<!doctype html><meta charset="utf-8"><title>Nightly batch ${esc(date)}</title>` +
+    `<style>body{font:14px/1.5 -apple-system,Segoe UI,Arial;max-width:900px;margin:30px auto;padding:0 20px}pre{white-space:pre-wrap;background:#f6f6f6;padding:12px;border-radius:6px;font-size:12px}</style>` +
+    `<h1>Breadwright nightly batch — ${esc(date)}</h1>` +
+    `<p>Status: <b>${esc(meta.status)}</b> · ${esc(String(meta.sendable))} order(s) · ${esc(String(meta.files.length))} file(s)</p>` +
+    blockedHtml +
+    xmls.map((x, i) => `<h3>${esc(meta.files[i].filename)}</h3><pre>${esc(x)}</pre>`).join('')
+  );
+});
+
 // Trigger the end-of-day batch on demand (dashboard button or external cron
 // hitting this URL). Key-gated; the key stays server-side in the dashboard proxy.
 app.post('/batch/run', async (req, res) => {
