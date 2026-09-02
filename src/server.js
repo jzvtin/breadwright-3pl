@@ -90,7 +90,7 @@ const PEEK_KEY = process.env.PEEK_KEY;
 // Live Datex FootPrint folders (Bill deleted the old /Test/to-icecube + /Test/to-breadwright
 // convention 2026-08-18; the real paths are under /Datex). WE drop orders in Import/Test;
 // Ice Cube posts ship-confirms in Export/Test; Datex moves imported files to Archive / rejects to Error.
-const PEEK_DIRS = ['/Datex/Import/Test', '/Datex/Export/Test', '/Test/Archive', '/Test/Error'];
+const PEEK_DIRS = ['/Datex/Import/Prod', '/Datex/Export/Prod', '/Datex/Import/Test', '/Datex/Export/Test'];
 const PEEK_ALLOWED = ['/Test', '/Datex'];
 
 // Capture the raw body for HMAC verification.
