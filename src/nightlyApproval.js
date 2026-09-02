@@ -22,6 +22,7 @@ const { normalizeOrder, fetchOrdersForBatch, tagOrderSent } = require('./shopify
 const { buildBatchChunks, buildCustomerOrder } = require('./xml/buildOrder');
 const { putXml, DRY_RUN } = require('./sftp');
 const { sendMail } = require('./mailer');
+const { appendAuditRows } = require('./auditLog');
 
 const NIGHTLY_DIR = path.join(__dirname, '../out/.nightly');
 fs.mkdirSync(NIGHTLY_DIR, { recursive: true });
@@ -63,6 +64,21 @@ function orderSummaryLine(order, pack) {
   return `#${order.number} — ${s.accountName || 'customer'} (${dest || 'no city'}) — ${tierLabel(order.serviceTier)}${dry}`;
 }
 
+/** Structured per-order detail — persisted in meta so sendNightly can build the audit-log rows without re-fetching/re-building anything. */
+function orderDetail(order, pack) {
+  const s = order.shipping || {};
+  return {
+    number: order.number,
+    customer: s.accountName || '',
+    city: s.city || '',
+    state: s.state || '',
+    serviceTier: order.serviceTier || '',
+    dryIceSlabs: (pack && pack.dryIceSlabs) || 0,
+    declareDryIce: !!(pack && pack.declareDryIce),
+    contents: pack ? (pack.contents || []).map((c) => `${c.qty} ${c.desc || c.code}`).join(' | ') : '',
+  };
+}
+
 /** Phase 1 (~9pm): build the batch, stage it, email Sam for approval. Never sends. */
 async function prepareNightly({ now = new Date(), windowHours = 25 } = {}) {
   const date = dateStamp(now);
@@ -76,6 +92,7 @@ async function prepareNightly({ now = new Date(), windowHours = 25 } = {}) {
   const sendRaws = [];
   const blocked = [];
   const summaryLines = [];
+  const orderDetails = [];
   allOrders.forEach((order, i) => {
     let b = [];
     let pack = null;
@@ -85,14 +102,14 @@ async function prepareNightly({ now = new Date(), windowHours = 25 } = {}) {
       pack = built.pack;
     } catch (e) { b = ['build error: ' + e.message]; }
     if (b.length) blocked.push({ number: order.number, reasons: b });
-    else { orders.push(order); sendRaws.push(raws[i]); summaryLines.push(orderSummaryLine(order, pack)); }
+    else { orders.push(order); sendRaws.push(raws[i]); summaryLines.push(orderSummaryLine(order, pack)); orderDetails.push(orderDetail(order, pack)); }
   });
 
   const token = crypto.randomBytes(16).toString('hex');
   const meta = {
     date, builtAt: now.toISOString(), windowHours, token,
     status: 'pending', decidedAt: null, decidedBy: null,
-    count: allOrders.length, sendable: orders.length, blocked, summaryLines,
+    count: allOrders.length, sendable: orders.length, blocked, summaryLines, orderDetails,
     files: [], sendRawsFile: 'raws.json',
   };
 
@@ -202,14 +219,25 @@ async function sendNightly({ now = new Date() } = {}) {
   meta.dropped = dropped;
   writeMeta(date, meta);
 
+  // Durable audit trail — every product actually sent to ICCS, persisted off
+  // Railway's ephemeral disk (see src/auditLog.js). Never blocks the send.
+  const auditFilename = dropped.map((d) => d.filename).join('; ');
+  const auditRows = (meta.orderDetails || []).map((od) => ({
+    ts: now.toISOString(), date, order: od.number, customer: od.customer, city: od.city, state: od.state,
+    serviceTier: od.serviceTier, dryIceSlabs: od.dryIceSlabs, declareDryIce: od.declareDryIce ? 'yes' : 'no',
+    contents: od.contents, filename: auditFilename, approvedBy: meta.decidedBy, sentVia: 'nightly-approval',
+  }));
+  const audit = await appendAuditRows(auditRows);
+
   await sendMail({
     to: ALERT_TO,
     subject: `Breadwright 3PL batch SENT — ${date} — ${meta.sendable} order(s)`,
     text: `Approved by ${meta.decidedBy} at ${meta.decidedAt}. Sent ${dropped.length} file(s), ${meta.sendable} order(s) to Ice Cube.` +
-      (tagErrors.length ? `\n\n${tagErrors.length} Shopify tag-sent failure(s): ` + JSON.stringify(tagErrors) : ''),
+      (tagErrors.length ? `\n\n${tagErrors.length} Shopify tag-sent failure(s): ` + JSON.stringify(tagErrors) : '') +
+      (audit.ok === false && !audit.skipped ? `\n\n⚠️ Audit log write failed: ${audit.error}` : ''),
   });
-  console.log(`[nightly] sent ${date}: ${JSON.stringify(dropped)}`);
-  return { ok: true, sent: true, date, dropped, tagged, tagErrors };
+  console.log(`[nightly] sent ${date}: ${JSON.stringify(dropped)}, audit=${JSON.stringify(audit)}`);
+  return { ok: true, sent: true, date, dropped, tagged, tagErrors, audit };
 }
 
 module.exports = { prepareNightly, sendNightly, decide, readMeta, dateStamp };
